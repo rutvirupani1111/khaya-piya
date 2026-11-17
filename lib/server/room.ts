@@ -8,7 +8,7 @@ export interface RoomRow {
   version: string | number;
   status: string;
   vpa: string | null;
-  host_token_hash: Buffer;
+  host_token_hash: string;
   is_demo: boolean;
   snapshot: RoomState;
   group_id: string | null;
@@ -29,16 +29,17 @@ export function setHostCookie(res: NextResponse, code: string, tok: string) {
 }
 
 export async function loadRoom(q: Q | null, code: string, lock = false): Promise<RoomRow | null> {
-  const text = `select code, version, status, vpa, host_token_hash, is_demo, snapshot, group_id, expires_at
+  const text = `select code, version, status, vpa, encode(host_token_hash, 'hex') as host_token_hash, is_demo, snapshot, group_id, expires_at
                 from rooms where code = $1 and expires_at > now()${lock ? " for update" : ""}`;
   const rows = q ? await q.query<RoomRow>(text, [code]) : await sql<RoomRow>(text, [code]);
   return rows[0] ?? null;
 }
 
 export async function resolveActor(q: Q | null, room: RoomRow, hostTok: string | undefined, devTok: string): Promise<Actor> {
-  const isHost = !!hostTok && Buffer.compare(sha256(hostTok), Buffer.from(room.host_token_hash)) === 0;
-  const text = `select id from members where room_code = $1 and device_hash = $2`;
-  const rows = q ? await q.query<{ id: string }>(text, [room.code, sha256(devTok)]) : await sql<{ id: string }>(text, [room.code, sha256(devTok)]);
+  const isHost = !!hostTok && sha256(hostTok).toString("hex") === room.host_token_hash;
+  const text = `select id from members where room_code = $1 and device_hash = decode($2, 'hex')`;
+  const h = sha256(devTok).toString("hex");
+  const rows = q ? await q.query<{ id: string }>(text, [room.code, h]) : await sql<{ id: string }>(text, [room.code, h]);
   let memberId = rows[0]?.id ?? null;
   if (isHost && !memberId) memberId = room.snapshot.hostMemberId;
   return { isHost, memberId };

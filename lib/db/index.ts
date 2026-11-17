@@ -1,5 +1,5 @@
 // Neon access. A Pool over WebSocket, created per request for transactions (Node runtime route handlers).
-import { Pool } from "@neondatabase/serverless";
+import { neon, Pool } from "@neondatabase/serverless";
 
 export type Row = Record<string, unknown>;
 export interface Q {
@@ -12,14 +12,10 @@ function url() {
   return u;
 }
 
-/** One-off query: opens a pool, runs, closes. */
+/** One-off query over the neon() HTTP driver: no socket setup, one round trip. */
 export async function sql<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
-  const pool = new Pool({ connectionString: url(), max: 1 });
-  try {
-    return (await pool.query(text, params)).rows as T[];
-  } finally {
-    await pool.end();
-  }
+  const q = neon(url());
+  return (await q.query(text, params)) as T[];
 }
 
 /** A transaction with its own pool, closed at the end of the request. */
