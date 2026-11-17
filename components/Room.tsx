@@ -294,7 +294,7 @@ function ClaimList({ room, canClaim }: { room: RoomApi; canClaim: boolean }) {
                 </span>
                 <Money p={it.amount} className="text-[13px]" />
               </button>
-              {mineC && others.length > 0 && it.qty === 1 && (
+              {canClaim && mineC && others.length > 0 && it.qty === 1 && (
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                   <span className="rounded-full bg-[var(--haldi)] px-2 py-1 font-semibold text-[#1B1A17]">{v.members.find((x) => x.id === others[0].memberId)?.name} {t("claim.shared")}</span>
                   <button type="button" className="tap press rounded border px-2" onClick={() => room.send({ type: "unclaim", itemId: it.id, memberId: me })}>{t("claim.notMine")}</button>
