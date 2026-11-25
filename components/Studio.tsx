@@ -1182,40 +1182,135 @@ function TiffinSheet({ tiffins, onClose, onPick }: { tiffins: TiffinRef[]; onClo
   );
 }
 
+/**
+ * The roti: one slice per person holding the item. Drag a slice edge round the rim and it snaps to twelfths,
+ * so halves, thirds and quarters fall into place; arrow keys move a focused edge. Slice sizes are the weights.
+ */
 function Roti({ d, itemId, onClose, update }: { d: Draft; itemId: string; onClose: () => void; update: (fn: (d: Draft) => Draft) => void }) {
   const cl = d.claims.filter((c) => c.itemId === itemId);
+  const it = d.items.find((i) => i.id === itemId);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [live, setLive] = useState<number[] | null>(null);
+  const drag = useRef<number | null>(null);
   const W = cl.reduce((a, c) => a + c.weight, 0);
+  const n = cl.length;
+  /** Cumulative edges in twelfths; the last edge is always 12 (the top of the roti). */
+  const toEdges = (ws: number[]) => {
+    const tot = ws.reduce((a, b) => a + b, 0) || 1;
+    let acc = 0;
+    const b = ws.map((w) => Math.round(((acc += w) * 12) / tot));
+    for (let k = 0; k < b.length; k++) b[k] = Math.max(b[k], (k ? b[k - 1] : 0) + 1);
+    b[b.length - 1] = 12;
+    for (let k = b.length - 2; k >= 0; k--) b[k] = Math.min(b[k], b[k + 1] - 1);
+    return b;
+  };
+  // the edges show whenever the weights are exact twelfths (any 1, 2, 3, 4, 6 or 12 total scales cleanly)
+  const edges = live ?? (n > 1 && n <= 12 && W > 0 && 12 % W === 0 ? toEdges(cl.map((c) => c.weight)) : null);
+  const fracs = edges ? edges.map((e) => e / 12) : (() => { let a = 0; return cl.map((c) => (a += c.weight) / (W || 1)); })();
+  const commitEdges = (b: number[]) => {
+    const ws = b.map((e, k) => e - (k ? b[k - 1] : 0));
+    update((x) => { let k = 0; x.claims = x.claims.map((c) => (c.itemId === itemId ? { ...c, weight: Math.max(1, Math.min(12, ws[k++] ?? 1)) } : c)); return x; });
+  };
   const set = (memberId: string, w: number) => update((x) => ({ ...x, claims: x.claims.map((c) => (c.itemId === itemId && c.memberId === memberId ? { ...c, weight: Math.max(1, Math.min(12, w)) } : c)) }));
   const preset = (ws: number[]) => update((x) => { let k = 0; x.claims = x.claims.map((c) => (c.itemId === itemId ? { ...c, weight: ws[k++] ?? 1 } : c)); return x; });
-  let acc = 0;
+  const moveEdge = (b: number[], k: number, to: number) => {
+    const lo = (k ? b[k - 1] : 0) + 1;
+    const hi = b[k + 1] - 1;
+    const nb = [...b];
+    nb[k] = Math.max(lo, Math.min(hi, to));
+    return nb;
+  };
+  const angleTwelfth = (e: React.PointerEvent) => {
+    const r = svgRef.current!.getBoundingClientRect();
+    const x = e.clientX - (r.left + r.width / 2);
+    const y = e.clientY - (r.top + r.height / 2);
+    let a = Math.atan2(x, -y);
+    if (a < 0) a += Math.PI * 2;
+    return Math.round((a / (Math.PI * 2)) * 12);
+  };
+  const pt = (f: number, rad = 54) => [rad * Math.sin(f * Math.PI * 2), -rad * Math.cos(f * Math.PI * 2)];
+  const share = (f0: number, f1: number) => Math.round((it?.amount ?? 0) * (f1 - f0));
   return (
     <m.div className="fixed inset-0 z-50 flex items-end bg-[#0008]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-      <m.div role="dialog" aria-modal="true" aria-label="Roti" className="kot mx-auto w-full max-w-xl rounded-t-2xl p-4" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e) => e.stopPropagation()}>
-        <svg viewBox="-60 -60 120 120" className="mx-auto h-40 w-40" aria-hidden="true">
+      <m.div role="dialog" aria-modal="true" aria-label="Roti: hisse badlo" className="kot mx-auto w-full max-w-xl rounded-t-2xl p-4" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+        <p className="mono text-center text-sm">{it?.name} · <Money p={it?.amount ?? 0} /></p>
+        <svg
+          ref={svgRef}
+          viewBox="-66 -66 132 132"
+          className="mx-auto h-48 w-48 touch-none select-none"
+          onPointerMove={(e) => {
+            if (drag.current == null || !edges) return;
+            const nb = moveEdge(edges, drag.current, angleTwelfth(e));
+            if (nb[drag.current] !== edges[drag.current]) setLive(nb);
+          }}
+          onPointerUp={() => {
+            if (drag.current != null && live) commitEdges(live);
+            drag.current = null;
+            setLive(null);
+          }}
+          onPointerCancel={() => { drag.current = null; setLive(null); }}
+        >
+          <circle r="56" fill="#d9b06a" />
           <circle r="54" fill="#e8c98a" stroke="#8a5a34" strokeWidth="1.5" />
-          {cl.map((c) => {
-            const a0 = (acc / W) * Math.PI * 2;
-            acc += c.weight;
-            const a1 = (acc / W) * Math.PI * 2;
+          {/* tawa spots */}
+          {[[-20, -14, 4], [16, 22, 3], [24, -18, 2.5], [-14, 26, 3], [4, -32, 2]].map(([x, y, r], i) => <circle key={i} cx={x} cy={y} r={r} fill="#a8743a" opacity=".45" />)}
+          {cl.map((c, k) => {
+            const f0 = k ? fracs[k - 1] : 0;
+            const f1 = fracs[k];
+            const [x0, y0] = pt(f0);
+            const [x1, y1] = pt(f1);
             const mm = d.members.find((x) => x.id === c.memberId)!;
-            return <path key={c.memberId} d={`M0 0L${54 * Math.sin(a0)} ${-54 * Math.cos(a0)}A54 54 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${54 * Math.sin(a1)} ${-54 * Math.cos(a1)}Z`} fill={ink(mm.seat).fill} fillOpacity=".55" stroke="#8a5a34" strokeWidth="1.5" />;
+            return <path key={c.memberId} d={`M0 0L${x0} ${y0}A54 54 0 ${f1 - f0 > 0.5 ? 1 : 0} 1 ${x1} ${y1}Z`} fill={ink(mm.seat).fill} fillOpacity=".5" stroke="#8a5a34" strokeWidth="1.5" />;
+          })}
+          {edges && n > 1 && edges.slice(0, -1).map((e, k) => {
+            const [hx, hy] = pt(e / 12, 58);
+            const a = cl[k] && d.members.find((x) => x.id === cl[k].memberId);
+            const b = cl[k + 1] && d.members.find((x) => x.id === cl[k + 1].memberId);
+            return (
+              <g
+                key={k}
+                role="slider"
+                tabIndex={0}
+                aria-label={`${a?.name} aur ${b?.name} ke beech ki kinaar`}
+                aria-valuemin={1}
+                aria-valuemax={11}
+                aria-valuenow={e}
+                aria-valuetext={`${a?.name} ${e - (k ? edges[k - 1] : 0)} hissa`}
+                className="roti-edge cursor-grab outline-none"
+                onPointerDown={(ev) => { ev.preventDefault(); (ev.currentTarget.ownerSVGElement as SVGSVGElement | null)?.setPointerCapture(ev.pointerId); drag.current = k; }}
+                onKeyDown={(ev) => {
+                  const step = ev.key === "ArrowRight" || ev.key === "ArrowUp" ? 1 : ev.key === "ArrowLeft" || ev.key === "ArrowDown" ? -1 : 0;
+                  if (!step) return;
+                  ev.preventDefault();
+                  commitEdges(moveEdge(edges, k, e + step));
+                }}
+              >
+                <circle cx={hx} cy={hy} r="12" fill="transparent" />
+                <circle cx={hx} cy={hy} r="6" fill="#F6EED9" stroke="#1B1A17" strokeWidth="2" />
+              </g>
+            );
           })}
         </svg>
-        <div className="mt-2 flex flex-wrap justify-center gap-2 text-sm font-semibold">
-          <button type="button" className="tap press rounded-full border px-3" onClick={() => preset(cl.map(() => 1))}>Aadha aadha</button>
-          {cl.length === 2 && <button type="button" className="tap press rounded-full border px-3" onClick={() => preset([2, 1])}>2 : 1</button>}
-          {cl.length === 2 && <button type="button" className="tap press rounded-full border px-3" onClick={() => preset([1, 2])}>1 : 2</button>}
+        {!edges && n > 1 && n <= 12 && (
+          <button type="button" className="tap press mx-auto mb-1 block rounded-full border border-dashed px-3 text-sm" onClick={() => commitEdges(toEdges(cl.map((c) => c.weight)))}>Kinaar kheench ke kaato</button>
+        )}
+        <div className="mt-1 flex flex-wrap justify-center gap-2 text-sm font-semibold">
+          <button type="button" className="tap press rounded-full border px-3" onClick={() => preset(n === 2 ? [6, 6] : n === 3 ? [4, 4, 4] : n === 4 ? [3, 3, 3, 3] : n === 6 ? [2, 2, 2, 2, 2, 2] : cl.map(() => 1))}>Aadha aadha</button>
+          {n === 2 && <button type="button" className="tap press rounded-full border px-3" onClick={() => preset([8, 4])}>2 : 1</button>}
+          {n === 2 && <button type="button" className="tap press rounded-full border px-3" onClick={() => preset([4, 8])}>1 : 2</button>}
         </div>
         <ul className="mt-3 space-y-2">
-          {cl.map((c) => {
+          {cl.map((c, k) => {
             const mm = d.members.find((x) => x.id === c.memberId)!;
+            const w = edges ? edges[k] - (k ? edges[k - 1] : 0) : c.weight;
             return (
-              <li key={c.memberId} className="flex items-center justify-between">
-                <span className="hand text-lg" style={{ color: ink(mm.seat).text }}>{mm.name}</span>
+              <li key={c.memberId} className="flex items-center justify-between gap-2">
+                <span className="hand min-w-0 flex-1 truncate text-lg" style={{ color: ink(mm.seat).text }}>{mm.name}</span>
+                <Money p={share(k ? fracs[k - 1] : 0, fracs[k])} className="mono text-sm opacity-80" />
                 <span className="flex items-center gap-2">
-                  <button type="button" className="tap press rounded border" onClick={() => set(c.memberId, c.weight - 1)}>−</button>
-                  <span className="mono w-6 text-center">{c.weight}</span>
-                  <button type="button" className="tap press rounded border" onClick={() => set(c.memberId, c.weight + 1)}>+</button>
+                  <button type="button" aria-label={`${mm.name} ka hissa kam`} className="tap press rounded border" onClick={() => set(c.memberId, c.weight - 1)}>−</button>
+                  <span className="mono w-6 text-center">{w}</span>
+                  <button type="button" aria-label={`${mm.name} ka hissa zyada`} className="tap press rounded border" onClick={() => set(c.memberId, c.weight + 1)}>+</button>
                 </span>
               </li>
             );
@@ -1379,7 +1474,7 @@ export function Shelf({ localId }: { localId: string }) {
                       <span>uska remainder sabse bada tha ({coins.map((c) => c.label).join(", ")})</span>
                     </details>
                   )}
-                  <div className="display mt-1 text-right text-xl"><Money p={p?.total ?? 0} /></div>
+                  <div className="display mt-1 text-right text-xl"><Odometer p={p?.total ?? 0} /></div>
                 </li>
               );
             })}

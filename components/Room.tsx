@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { kvGet, kvSet } from "@/lib/draft";
 import { amountParam, type Charge } from "@/lib/money";
 import { applyOp, billOf, type Actor, type Op, type Snapshot } from "@/lib/room/ops";
-import { Coin, Jar, Mishri, Money, Pattern, Seeds, Stamp, Thali, ink } from "./art";
+import { Coin, Jar, Mishri, Money, Odometer, Pattern, Seeds, Stamp, Thali, ink } from "./art";
 import { usePrefs } from "./Prefs";
 
 type Snap = Snapshot & { me: Actor };
@@ -269,7 +269,7 @@ function GuestPage({ room, nameRef, handedOver }: { room: RoomApi; nameRef: Reac
     <main className="mx-auto max-w-xl px-4 pb-40 pt-3">
       <m.header layoutId="spine" className="leather sticky top-0 z-20 -mx-4 flex items-center justify-between px-4 py-2 text-[#F6EED9]">
         <span className="display foil text-xl">{v.restaurant || "KhayaPiya"}</span>
-        {mine && <span className="text-sm">{t("share.mine")} <Money p={mine.total} className="display text-lg text-[var(--haldi)]" /></span>}
+        {mine && <span className="text-sm" aria-live="polite">{t("share.mine")} <Odometer p={mine.total} className="display text-lg text-[var(--haldi)]" /></span>}
       </m.header>
 
       {handedOver && (

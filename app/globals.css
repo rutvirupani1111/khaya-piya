@@ -187,3 +187,5 @@ html[data-fast] .scene-in { animation-duration: 150ms; }
   .odo-strip { transition: none; }
   .dup-pulse, .ink-tie { animation: none; }
 }
+/* roti slice edges: a haldi ring when the keyboard is on one */
+.roti-edge:focus-visible circle:last-child { stroke: var(--haldi); stroke-width: 3.5; }
