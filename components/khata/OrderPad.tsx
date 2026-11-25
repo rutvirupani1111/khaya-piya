@@ -71,7 +71,8 @@ export function OrderPad({ next = "/khata", compact = false }: { next?: string; 
         <div className="-mx-4 bg-[#e7e2d4] px-2 pt-1"><Spiral /></div>
         <div className="flex h-[34px] items-end justify-between pb-0.5">
           <p className="display text-2xl text-[var(--stamp-red-deep)]">{t("login.title")}</p>
-          <p className="mono text-xs opacity-70">No. {String(new Date().getDate()).padStart(2, "0")}07</p>
+          {/* the pad's serial is today's date in India, so the server and the phone print the same number */}
+          <p className="mono text-xs opacity-70" suppressHydrationWarning>No. {new Intl.DateTimeFormat("en-IN", { day: "2-digit", timeZone: "Asia/Kolkata" }).format(new Date())}07</p>
         </div>
         <div role="tablist" className="mt-3 grid grid-cols-2 gap-2">
           {(["new", "back"] as const).map((k) => (
