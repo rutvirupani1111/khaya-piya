@@ -561,7 +561,7 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
                     onDragEnd={(_: unknown, info: { offset: { x: number } }) => info.offset.x < -96 && tear(it.id)}
                     className={dupId === it.id ? "dup-pulse rounded" : undefined}
                   >
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-end gap-1">
                       <button type="button" onClick={() => setEditing(it.id)} className="tap mono flex min-w-0 flex-1 items-end gap-1.5 py-1 text-left text-[13px] leading-snug">
                         <span className="min-w-0 [overflow-wrap:anywhere]">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
                         <span aria-hidden="true" className="mb-1 min-w-3 flex-1 border-b-2 border-dotted border-[#1B1A1740]" />
