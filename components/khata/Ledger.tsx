@@ -436,7 +436,8 @@ function Thread({ i, from, to, me, amount, groupName, onDone }: { i: number; fro
       : lang === "hi"
         ? `${fromMe ? "तुझसे" : `${from.name} से`} ${toMe ? "तुझे" : `${to.name} को`}`
         : `${fromMe ? "Tujhse" : `${from.name} se`} ${toMe ? "tujhe" : `${to.name} ko`}`;
-  const remind = `https://wa.me/?text=${encodeURIComponent(`${from.name}, ${groupName} ka hisaab: ₹${amountParam(amount)} mujhe bhejna hai.${to.vpa ? ` UPI: ${to.vpa}` : ""} (KhayaPiya)`)}`;
+  // a WhatsApp nudge to whoever has to pay, with the UPI ID they should pay to
+  const remind = `https://wa.me/?text=${encodeURIComponent(`${from.name}, ${groupName} ka hisaab: ₹${amountParam(amount)} ${toMe ? "mujhe" : `${to.name} ko`} bhejna hai.${to.vpa ? ` UPI: ${to.vpa}` : ""} (KhayaPiya)`)}`;
   const ask = async () => {
     const text = `${to.name}, ${groupName} ka hisaab: ${from.name} tujhe ₹${amountParam(amount)} bhejega. Apna UPI ID bhej de.`;
     try {
@@ -475,10 +476,12 @@ function Thread({ i, from, to, me, amount, groupName, onDone }: { i: number; fro
       <div className="mt-1 flex gap-2 pb-2 text-sm font-semibold">
         {toMe ? (
           <a href={remind} target="_blank" rel="noopener" className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{t("khata.remind")}</a>
-        ) : upi ? (
-          <a href={upi} className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{fromMe ? t("khata.payUpi") : `${from.name.split(" ")[0]}: UPI`}</a>
+        ) : fromMe && upi ? (
+          <a href={upi} className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{t("khata.payUpi")}</a>
+        ) : !fromMe && to.vpa ? (
+          <a href={remind} target="_blank" rel="noopener" className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{t("khata.remind")}</a>
         ) : (
-          <button type="button" onClick={ask} className="tap press flex-1 rounded-md border-2 border-dashed border-[#1B1A17] px-2 text-[#1B1A17]">{copied ? "Copy ho gaya, WhatsApp pe bhejo" : t("khata.askVpa")}</button>
+          <button type="button" onClick={ask} className="tap press flex-1 rounded-md border-2 border-dashed border-[#1B1A17] px-2 text-[#1B1A17]">{copied ? t("khata.copiedAsk") : t("khata.askVpa")}</button>
         )}
         <button type="button" onClick={onDone} className="tap press flex items-center gap-1.5 rounded-md bg-[#1D6B3E] px-3 text-[#F6EED9]">
           <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3 3 7-7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -635,10 +638,10 @@ function Invite({ gid, code, name, onCode, onError }: { gid: string; code: strin
   return (
     <section className="mt-6 rounded-sm border-2 border-dashed border-current p-3">
       <h2 className="hand text-xl font-bold">{t("khata.invite")}</h2>
-      <p className="text-sm opacity-80">Ye link bhejo. Dost khol ke apna passkey banayega, phir is group mein kharcha likh aur dekh sakega.</p>
+      <p className="text-sm opacity-80">{t("khata.inviteHow")}</p>
       <p className="mono mt-2 truncate rounded bg-[#00000010] px-2 py-2 text-xs">{origin ? link : `/g/${code}`}</p>
       <div className="mt-2 flex flex-wrap gap-2 text-sm font-semibold">
-        <button type="button" onClick={copy} className="tap press rounded-md border border-current px-3">{copied ? "Copy ho gaya" : "Link copy karo"}</button>
+        <button type="button" onClick={copy} className="tap press rounded-md border border-current px-3">{copied ? t("khata.copied") : t("khata.copyLink")}</button>
         <a href={`https://wa.me/?text=${encodeURIComponent(`${name} ke khate mein aa ja: ${link}`)}`} target="_blank" rel="noopener" className="tap press grid place-items-center rounded-md border border-current px-3">WhatsApp</a>
         <button type="button" disabled={busy} onClick={rotate} className="tap press rounded-md border border-current px-3 disabled:opacity-50" title="Purana link band ho jayega">{busy ? "..." : t("khata.newLink")}</button>
       </div>
@@ -647,6 +650,7 @@ function Invite({ gid, code, name, onCode, onError }: { gid: string; code: strin
 }
 
 function Danger({ gid, onGone, onError }: { gid: string; onGone: () => void; onError: (t: string) => void }) {
+  const { t } = usePrefs();
   const [sure, setSure] = useState(false);
   const [busy, setBusy] = useState(false);
   const go = async () => {
@@ -662,12 +666,12 @@ function Danger({ gid, onGone, onError }: { gid: string; onGone: () => void; onE
   return (
     <section className="mt-6 text-sm">
       {!sure ? (
-        <button type="button" onClick={() => setSure(true)} className="tap press rounded-md px-1 font-semibold underline underline-offset-4 opacity-80">Ye group delete karo</button>
+        <button type="button" onClick={() => setSure(true)} className="tap press rounded-md px-1 font-semibold underline underline-offset-4 opacity-80">{t("khata.deleteGroup")}</button>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-semibold">Pakka? Saara hisaab mit jayega, wapas nahi aayega.</span>
-          <button type="button" disabled={busy} onClick={go} className="tap press rounded-md bg-[#A61E1E] px-3 font-semibold text-[#F6EED9] disabled:opacity-50">{busy ? "..." : "Haan, hatao"}</button>
-          <button type="button" onClick={() => setSure(false)} className="tap press rounded-md border border-current px-3">Nahi</button>
+          <span className="font-semibold">{t("khata.deleteSure")}</span>
+          <button type="button" disabled={busy} onClick={go} className="tap press rounded-md bg-[#A61E1E] px-3 font-semibold text-[#F6EED9] disabled:opacity-50">{busy ? "..." : t("khata.deleteYes")}</button>
+          <button type="button" onClick={() => setSure(false)} className="tap press rounded-md border border-current px-3">{t("khata.no")}</button>
         </div>
       )}
     </section>

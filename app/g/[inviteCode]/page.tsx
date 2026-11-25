@@ -46,7 +46,7 @@ export default async function Page({ params }: { params: Promise<{ inviteCode: s
             <JoinInvite code={code} seats={info.openSeats} me={user.display_name} />
           ) : (
             <>
-              <p className="mt-4 text-base leading-snug">Group mein aane ke liye pehle apna naam likho aur passkey banao. Passkey matlab tere phone ka fingerprint ya screen lock, bas.</p>
+              <p className="mb-4 mt-4 text-base leading-snug">Group mein aane ke liye pehle apna naam likho aur passkey banao. Phir group khul jayega.</p>
               <OrderPad next={`/g/${code}`} compact />
             </>
           )}

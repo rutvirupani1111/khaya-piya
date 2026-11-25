@@ -42,12 +42,12 @@ export function Tiffin({ n, tiers = 3, ghost, size = 96 }: { n: number; tiers?: 
   );
 }
 
-/** Red string bookmark that hangs from the top of the ledger. */
+/** Red string bookmark that hangs from the top of the ledger, short enough to clear the first written row. */
 export function Bookmark({ className }: { className?: string }) {
   return (
-    <svg width="18" height="90" viewBox="0 0 18 90" className={className} aria-hidden="true">
-      <path d="M9 0q-3 30 1 52t-2 30" fill="none" stroke="#A61E1E" strokeWidth="3" strokeLinecap="round" />
-      <path d="M8 80l-5 9M8 80l5 9" stroke="#A61E1E" strokeWidth="2" strokeLinecap="round" />
+    <svg width="18" height="46" viewBox="0 0 18 46" className={className} aria-hidden="true">
+      <path d="M9 0q-3 16 1 26t-2 12" fill="none" stroke="#A61E1E" strokeWidth="3" strokeLinecap="round" />
+      <path d="M8 37l-5 8M8 37l5 8" stroke="#A61E1E" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }

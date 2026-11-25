@@ -134,7 +134,15 @@ const M = {
   "khata.sharedIn": ["tu bhi likh sakta hai", "you can write in it too", "तू भी लिख सकता है"],
   "khata.ppl": ["log", "people", "लोग"],
   "khata.paid": ["ne diye", "paid", "ने दिए"],
-  "khata.eachEqual": ["log, har ek", "people, each", "लोग, हर एक"],  "calm": ["Shaant", "Calm", "शांत"],
+  "khata.eachEqual": ["log, har ek", "people, each", "लोग, हर एक"],  "khata.inviteHow": ["Ye link bhejo. Dost khol ke apna passkey banayega, phir is group mein kharcha likh aur dekh sakega.", "Send this link. Your friend makes a passkey and can then see and add to this group.", "ये लिंक भेजो। दोस्त खोल के अपना पासकी बनाएगा, फिर इस ग्रुप में खर्चा लिख और देख सकेगा।"],
+  "khata.copyLink": ["Link copy karo", "Copy link", "लिंक कॉपी करो"],
+  "khata.copied": ["Copy ho gaya", "Copied", "कॉपी हो गया"],
+  "khata.copiedAsk": ["Copy ho gaya, WhatsApp pe bhejo", "Copied, send it on WhatsApp", "कॉपी हो गया, WhatsApp पे भेजो"],
+  "khata.deleteGroup": ["Ye group delete karo", "Delete this group", "ये ग्रुप डिलीट करो"],
+  "khata.deleteSure": ["Pakka? Saara hisaab mit jayega, wapas nahi aayega.", "Sure? The whole tab is erased and cannot come back.", "पक्का? सारा हिसाब मिट जाएगा, वापस नहीं आएगा।"],
+  "khata.deleteYes": ["Haan, delete karo", "Yes, delete", "हाँ, डिलीट करो"],
+  "khata.no": ["Nahi", "No", "नहीं"],
+  "calm": ["Shaant", "Calm", "शांत"],
 } as const;
 
 export type Key = keyof typeof M;

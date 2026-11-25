@@ -1,5 +1,6 @@
 "use client";
-import { AnimatePresence, m } from "motion/react";
+// m (LazyMotion, domAnimation) everywhere; motion only where a finger drags something, since drag is not in domAnimation
+import { AnimatePresence, m, motion } from "motion/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -342,7 +343,7 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
             <AnimatePresence initial={false}>
               {lines.map((it, i) =>
                 i < visible ? (
-                  <m.li key={it.id} layout layoutId={`line-${it.id}`} initial={{ y: -28, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ x: -120, opacity: 0, rotate: -4 }} transition={settle}
+                  <motion.li key={it.id} layout layoutId={`line-${it.id}`} initial={{ y: -28, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ x: -120, opacity: 0, rotate: -4 }} transition={settle}
                     drag={calm ? false : "x"} dragConstraints={{ left: 0, right: 0 }} dragElastic={0.6}
                     onDragEnd={(_, info) => info.offset.x < -96 && tear(it.id)}
                   >
@@ -354,7 +355,7 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
                       </button>
                       <button type="button" aria-label={`Tear ${it.name}`} onClick={() => tear(it.id)} className="tap grid place-items-center text-lg opacity-60">×</button>
                     </div>
-                  </m.li>
+                  </motion.li>
                 ) : null,
               )}
             </AnimatePresence>
@@ -629,7 +630,7 @@ export function Table({ localId }: { localId: string }) {
               const active = sel === it.id;
               return (
                 <li key={it.id}>
-                  <m.button layoutId={`line-${it.id}`} type="button"
+                  <motion.button layoutId={`line-${it.id}`} type="button"
                     onClick={() => { if (dragged.current) return; setSel(active ? null : it.id); }}
                     drag={!calm} dragSnapToOrigin dragMomentum={false} dragElastic={1}
                     whileDrag={{ scale: 1.08, zIndex: 40, boxShadow: "6px 12px 18px rgba(27,26,23,.28)" }}
@@ -653,7 +654,7 @@ export function Table({ localId }: { localId: string }) {
                       <Money p={it.amount} className="text-xs" />
                     </span>
                     <span className="flex">{cl.map((c) => { const mm = d.members.find((x) => x.id === c.memberId); return mm ? <Pattern key={c.memberId} seat={mm.seat} size={14} /> : null; })}</span>
-                  </m.button>
+                  </motion.button>
                 </li>
               );
             })}
@@ -918,7 +919,7 @@ export function Shelf({ localId }: { localId: string }) {
                   return (
                     <li key={it.id}>
                       <label className="tap flex items-center gap-2">
-                        <input type="checkbox" checked={on} onChange={() => { const cur = c.scope ?? d.items.map((i) => i.id); const nx = on ? cur.filter((x) => x !== it.id) : [...cur, it.id]; setC(c.id, { scope: nx.length === d.items.length ? null : nx }); }} className="size-5" />
+                        <input type="checkbox" checked={on} onChange={() => { const cur = c.scope ?? d.items.map((i) => i.id); const nx = on ? cur.filter((x) => x !== it.id) : [...cur, it.id]; setC(c.id, { scope: nx.length === d.items.length ? null : nx }); }} className="size-5 accent-[#1D6B3E]" />
                         <span className="mono flex-1 truncate text-xs">{it.name}</span>
                         <Money p={it.amount} className="text-xs" />
                       </label>
