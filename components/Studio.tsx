@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeBill, toPaise, type Charge, type ChargeKind, type Item } from "@/lib/money";
+import { cropLine, readPhoto, type OcrLine } from "@/lib/ocr";
 import { parseBill, parseQuick } from "@/lib/parse";
 import { DEMO_TEXT, demoDraft, kvGet, kvSet, loadDraft, newDraft, saveDraft, uid, type Draft, type DraftMember } from "@/lib/draft";
-import { Bell, Coin, Jar, Katori, Money, Pattern, Printer, Scale, Stamp, Thali, ink } from "./art";
+import { Bell, Coin, Jar, Katori, Money, Odometer, Pattern, Printer, Scale, Stamp, Thali, ink } from "./art";
 import { Tiffin, tiffinInk } from "./khata/art";
 import { LangSwitch, usePrefs } from "./Prefs";
 
@@ -45,6 +46,20 @@ function useDraft(localId: string | null, demo: boolean) {
       return next;
     });
   }, []);
+  /** A change that does not get its own undo step (the lines of one scan arriving band by band). */
+  const replace = useCallback((fn: (d: Draft) => Draft) => {
+    setD((prev) => {
+      if (!prev) return prev;
+      const next = fn(structuredClone(prev));
+      saveDraft(next).catch(() => {});
+      return next;
+    });
+  }, []);
+  /** Mark the point an undo should return to, before a series of replace() calls. */
+  const checkpoint = useCallback((snapshot: Draft) => {
+    hist.current = [...hist.current.slice(-19), snapshot];
+    fut.current = [];
+  }, []);
   const undo = () => setD((cur) => {
     const p = hist.current.pop();
     if (!p || !cur) return cur;
@@ -59,34 +74,102 @@ function useDraft(localId: string | null, demo: boolean) {
     saveDraft(n).catch(() => {});
     return n;
   });
-  return { d, update, undo, redo, canUndo: () => hist.current.length > 0 };
+  return { d, update, replace, checkpoint, undo, redo, canUndo: () => hist.current.length > 0 };
 }
 
-function applyParsed(d: Draft, text: string): Draft {
+/** Ids that stay the same each time a growing scan is parsed again, so lines already printed do not reprint. */
+interface Stable { items: string[]; charges: string[] }
+const stableId = (arr: string[] | undefined, k: number) => (arr ? (arr[k] ??= uid()) : uid());
+
+function parsedParts(text: string, stable?: Stable) {
   const p = parseBill(text);
-  const items: Item[] = p.lines.filter((l) => l.type === "item").map((l) => ({ id: uid(), name: l.name, qty: l.qty, amount: l.amount, kind: l.kind ?? "food" }));
+  const itemLines = p.lines.filter((l) => l.type === "item");
+  const items: Item[] = itemLines.map((l, k) => ({ id: stableId(stable?.items, k), name: l.name, qty: l.qty, amount: l.amount, kind: l.kind ?? "food" }));
+  const src = new Map(itemLines.map((l, k) => [items[k].id, l.src ?? -1]));
   const drinkIds = items.filter((i) => i.kind === "drink").map((i) => i.id);
   const foodIds = items.filter((i) => i.kind !== "drink").map((i) => i.id);
   const hasVat = p.lines.some((l) => l.chargeKind === "vat");
   const charges: Charge[] = p.lines
     .filter((l) => l.type === "charge")
-    .map((l) => {
-      const k = l.chargeKind as ChargeKind;
-      const gst = ["cgst", "sgst", "igst", "utgst"].includes(k);
+    .map((l, k) => {
+      const kind = l.chargeKind as ChargeKind;
+      const gst = ["cgst", "sgst", "igst", "utgst"].includes(kind);
       return {
-        id: uid(),
-        kind: k,
+        id: stableId(stable?.charges, k),
+        kind,
         label: l.name.slice(0, 30),
         mode: "amount" as const,
-        value: k === "roundoff" ? l.amount : Math.abs(l.amount),
-        scope: k === "vat" && drinkIds.length ? drinkIds : gst && hasVat && drinkIds.length && foodIds.length ? foodIds : null,
+        value: kind === "roundoff" ? l.amount : Math.abs(l.amount),
+        scope: kind === "vat" && drinkIds.length ? drinkIds : gst && hasVat && drinkIds.length && foodIds.length ? foodIds : null,
         split: "proportional" as const,
         included: false,
         removed: false,
       };
     });
-  return { ...d, restaurant: d.restaurant || p.restaurant, printedTotal: p.total ?? p.subtotal ?? d.printedTotal, items: [...d.items, ...items], charges: [...d.charges, ...charges] };
+  return { p, items, charges, src };
 }
+
+/** Put a scan's lines on the draft: earlier copies of the same scan are replaced, everything else is kept. */
+function mergeParsed(d: Draft, parts: ReturnType<typeof parsedParts>, stable: Stable): Draft {
+  const mine = new Set(stable.items);
+  const mineC = new Set(stable.charges);
+  const kept = new Set(parts.items.map((i) => i.id));
+  return {
+    ...d,
+    restaurant: d.restaurant || parts.p.restaurant,
+    printedTotal: parts.p.total ?? d.printedTotal ?? parts.p.subtotal,
+    items: [...d.items.filter((i) => !mine.has(i.id)), ...parts.items],
+    charges: [...d.charges.filter((c) => !mineC.has(c.id)), ...parts.charges],
+    claims: d.claims.filter((c) => !mine.has(c.itemId) || kept.has(c.itemId)),
+  };
+}
+
+function applyParsed(d: Draft, text: string): Draft {
+  const stable: Stable = { items: [], charges: [] };
+  return mergeParsed(d, parsedParts(text, stable), stable);
+}
+
+/**
+ * "Wapas lo": tap to undo, hold for half a second to redo. Every scene with a history uses this one token.
+ */
+function UndoToken({ undo, redo, label, className = "" }: { undo: () => void; redo: () => void; label: string; className?: string }) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const held = useRef(false);
+  const [redid, setRedid] = useState(0);
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  return (
+    <button
+      type="button"
+      aria-label={`${label} (dabaye rakho to wapas aage)`}
+      onPointerDown={() => {
+        held.current = false;
+        clear();
+        timer.current = setTimeout(() => {
+          held.current = true;
+          redo();
+          setRedid((n) => n + 1);
+          try { navigator.vibrate?.(12); } catch {}
+        }, 500);
+      }}
+      onPointerUp={clear}
+      onPointerLeave={clear}
+      onPointerCancel={clear}
+      onContextMenu={(e) => e.preventDefault()}
+      onClick={() => {
+        if (held.current) return void (held.current = false);
+        undo();
+      }}
+      className={`tap press kot relative select-none overflow-hidden rounded-md px-3 font-semibold ${className}`}
+    >
+      {label}
+      {redid > 0 && <m.span key={redid} aria-hidden="true" className="absolute inset-x-0 bottom-0 h-1 bg-[var(--chutney)]" initial={{ scaleX: 1, opacity: 1 }} animate={{ scaleX: 0, opacity: 0 }} transition={{ duration: 0.6 }} />}
+    </button>
+  );
+}
+
 
 /* ----------------------------- TIFFINS ----------------------------- */
 interface GroupLite { id: string; name: string; me: string | null; people: { id: string; name: string; seat: number }[]; entries: { kind: string; shares: { personId: string }[] }[] }
@@ -143,23 +226,63 @@ function KhataBook() {
 }
 
 type InstallPrompt = { prompt: () => Promise<unknown> };
+/** What a scan knows about each line it printed: the photo crop it came from and whether a number looked shaky. Memory only. */
+type LineMeta = { crop: string; low: boolean };
+
+const uniq = (xs: string[]) => {
+  const seen = new Set<string>();
+  return xs.filter((x) => {
+    const k = x.trim().toLowerCase();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+};
 
 /* ----------------------------- COUNTER ----------------------------- */
 export function Counter({ demo = false, localId = null }: { demo?: boolean; localId?: string | null }) {
   const { t, calm, fast } = usePrefs();
   const router = useRouter();
-  const { d, update, undo, redo } = useDraft(localId, demo);
+  const { d, update, replace, checkpoint, undo, redo } = useDraft(localId, demo);
+  const dRef = useRef(d);
+  dRef.current = d;
   const [printing, setPrinting] = useState<"idle" | "warm" | "reading">("idle");
   const [progress, setProgress] = useState(0);
+  const [band, setBand] = useState<{ done: number; of: number } | null>(null);
+  const [thumb, setThumb] = useState<string | null>(null);
+  const [photos, setPhotos] = useState(0);
+  const [hindi, setHindi] = useState(false);
+  const [hindiHint, setHindiHint] = useState(false);
   const [quick, setQuick] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [scrap, setScrap] = useState<{ item: Item; pos: number } | null>(null);
   const [err, setErr] = useState("");
   const [visible, setVisible] = useState(9999);
+  const [recent, setRecent] = useState<string[]>([]);
+  const [, bump] = useState(0);
+  const meta = useRef(new Map<string, LineMeta>());
+  const arrival = useRef(new Map<string, number>());
+  const lastScan = useRef<{ file: Blob; stable: Stable } | null>(null);
   const quickRef = useRef<HTMLTextAreaElement>(null);
   const startedDemo = useRef(false);
   const [install, setInstall] = useState<InstallPrompt | null>(null);
   const ready = !!d;
+
+  // dish names this phone has typed before, plus the signed-in person's dishes from their khatas
+  useEffect(() => {
+    kvGet<string[]>("recentItems").then((r) => r?.length && setRecent((cur) => uniq([...r, ...cur]).slice(0, 300))).catch(() => {});
+    fetch("/api/me/items", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { items?: string[] } | null) => j?.items?.length && setRecent((cur) => uniq([...cur, ...j.items!]).slice(0, 300)))
+      .catch(() => {});
+  }, []);
+  const learn = (names: string[]) => {
+    setRecent((cur) => {
+      const next = uniq([...names, ...cur]).slice(0, 300);
+      kvSet("recentItems", next).catch(() => {});
+      return next;
+    });
+  };
 
   // "Ghar pe rakh lo": only after this phone has seen two finalised splits, and never again once refused
   useEffect(() => {
@@ -188,24 +311,62 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
     for (let i = 1; i <= n; i++) setTimeout(() => setVisible(i), calm ? 0 : fast ? 40 + i * 40 : 260 + i * 140);
   }, [d, demo, update, calm, fast]);
 
-  const scan = async (file: File) => {
+  /**
+   * Read a photo band by band. Each band's lines print as soon as it is read; the whole scan is one undo step.
+   * `again` reads the last photo once more (in Hindi), replacing the lines that photo printed.
+   */
+  const scan = async (file: Blob, again?: "eng+hin") => {
+    if (!dRef.current || printing !== "idle") return;
+    const rescan = !!again && !!lastScan.current;
+    if (!rescan && photos >= 3) return setErr(t("counter.maxPhotos"));
+    const stable: Stable = rescan ? lastScan.current!.stable : { items: [], charges: [] };
+    lastScan.current = { file, stable };
+    checkpoint(dRef.current);
     setErr("");
+    setHindiHint(false);
     setPrinting("warm");
-    setProgress(0.05);
+    setProgress(0);
+    setBand(null);
+    setVisible(9999);
+    const url = URL.createObjectURL(file);
+    setThumb(url);
+    let printed = 0;
+    const lang = again ?? (hindi ? "eng+hin" : "eng");
     try {
-      await loadTesseract();
-      setPrinting("reading");
-      const T = (window as unknown as { Tesseract: TesseractNS }).Tesseract;
-      const worker = await T.createWorker("eng", 1, { logger: (mm: { status: string; progress: number }) => setProgress(mm.status.includes("recogn") ? 0.5 + mm.progress / 2 : Math.min(0.5, mm.progress / 2)) });
-      const timer = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 60000));
-      const res = (await Promise.race([worker.recognize(file), timer])) as { data: { text: string } };
-      await worker.terminate();
-      update((x) => applyParsed(x, res.data.text));
+      const photo = await readPhoto(file, lang, {
+        onWarm: (p) => setProgress(p),
+        onBand: (lines: OcrLine[], done, of) => {
+          setPrinting("reading");
+          setBand({ done, of });
+          const parts = parsedParts(lines.map((l) => l.text).join("\n"), stable);
+          parts.items.forEach((it, k) => {
+            if (k >= printed) arrival.current.set(it.id, k - printed);
+          });
+          printed = Math.max(printed, parts.items.length);
+          replace((x) => mergeParsed(x, parts, stable));
+        },
+      });
+      const parts = parsedParts(photo.lines.map((l) => l.text).join("\n"), stable);
+      for (const it of parts.items) {
+        const l = photo.lines[parts.src.get(it.id) ?? -1];
+        if (l) meta.current.set(it.id, { crop: cropLine(photo.canvas, l.box), low: l.numConf < 70 });
+      }
+      replace((x) => mergeParsed(x, parts, stable));
+      if (!rescan) setPhotos((n) => n + 1);
+      learn(parts.items.map((i) => i.name));
+      if (lang === "eng" && photo.nonAscii > 0.15 && photo.meanConf < 70) setHindiHint(true);
+      if (!parts.items.length) {
+        setErr(t("counter.fail"));
+        quickRef.current?.focus();
+      }
     } catch {
       setErr(t("counter.fail"));
       quickRef.current?.focus();
     } finally {
       setPrinting("idle");
+      setBand(null);
+      setThumb(null);
+      URL.revokeObjectURL(url);
     }
   };
 
@@ -250,11 +411,31 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
   const chargeSum = Object.values(bill.chargeAmounts).reduce((a, b) => a + b, 0);
   const gap = d.printedTotal != null ? d.printedTotal - itemsTotal - chargeSum : 0;
   const lines = d.items;
+  // items over the bill: the likeliest double read is a line with the same amount right after its twin
+  const dupId = gap < 0 ? (lines.find((it, i) => i > 0 && it.amount === lines[i - 1].amount && it.amount === -gap) ?? lines.find((it, i) => i > 0 && it.amount === lines[i - 1].amount))?.id : undefined;
+
+  // Quick Type autocomplete for the name being typed in the last entry
+  const seg = quick.split(/[,\n]/).pop() ?? "";
+  const partial = seg.replace(/^\s*\d{1,2}\s*[xX]?\s+/, "").trim();
+  const sugg =
+    partial.length >= 2 && !/\d/.test(partial)
+      ? recent
+          .filter((n) => n.toLowerCase().includes(partial.toLowerCase()) && n.toLowerCase() !== partial.toLowerCase())
+          .sort((a, b) => Number(!a.toLowerCase().startsWith(partial.toLowerCase())) - Number(!b.toLowerCase().startsWith(partial.toLowerCase())))
+          .slice(0, 5)
+      : [];
+  const pick = (name: string) => {
+    const head = quick.slice(0, quick.length - seg.length);
+    const lead = seg.match(/^\s*(\d{1,2}\s*[xX]?\s+)?/)?.[0] ?? "";
+    setQuick(`${head}${lead}${name} `);
+    quickRef.current?.focus();
+  };
 
   const addQuick = () => {
     const parsed = parseQuick(quick);
     if (!parsed.length) return;
     update((x) => ({ ...x, items: [...x.items, ...parsed.map((p) => ({ id: uid(), ...p }))] }));
+    learn(parsed.map((p) => p.name));
     setQuick("");
   };
   const tear = (id: string) => {
@@ -275,7 +456,14 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
   };
   const goTable = async () => {
     await saveDraft(d);
+    learn(d.items.map((i) => i.name));
     router.push(`/bill/${d.id}`);
+  };
+  const busy = printing !== "idle";
+  const pickPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (f) scan(f);
   };
 
   return (
@@ -300,38 +488,53 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
           </p>
         )}
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <label className="tap press hand grid cursor-pointer place-items-center rounded-lg border border-dashed border-[#f1ecdf80] px-1 py-2 text-center text-lg leading-tight">
-            {t("counter.photo")}
-            <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => e.target.files?.[0] && scan(e.target.files[0])} />
+          <label className={`tap press hand relative grid cursor-pointer place-items-center rounded-lg border border-dashed border-[#f1ecdf80] px-1 py-2 text-center text-lg leading-tight ${busy ? "pointer-events-none opacity-50" : ""}`}>
+            {photos > 0 && photos < 3 ? t("counter.next") : t("counter.photo")}
+            {photos > 0 && <span className="mono absolute right-1.5 top-1 text-[10px] opacity-80">{Math.min(3, photos + 1)}/3</span>}
+            <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={busy || photos >= 3} onChange={pickPhoto} />
           </label>
-          <label className="tap press hand grid cursor-pointer place-items-center rounded-lg border border-dashed border-[#f1ecdf80] px-1 py-2 text-center text-lg leading-tight">
+          <label className={`tap press hand grid cursor-pointer place-items-center rounded-lg border border-dashed border-[#f1ecdf80] px-1 py-2 text-center text-lg leading-tight ${busy ? "pointer-events-none opacity-50" : ""}`}>
             {t("counter.gallery")}
-            <input type="file" accept="image/*" className="sr-only" onChange={(e) => e.target.files?.[0] && scan(e.target.files[0])} />
+            <input type="file" accept="image/*" className="sr-only" disabled={busy || photos >= 3} onChange={pickPhoto} data-kp="gallery" />
           </label>
           <button type="button" onClick={() => quickRef.current?.focus()} className="tap press hand rounded-lg border border-dashed border-[#f1ecdf80] px-1 py-2 text-lg leading-tight">
             {t("counter.type")}
           </button>
         </div>
-        <div className="mt-3 text-[#f1ecdf]">
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-[#f1ecdf]">
           <LangSwitch />
+          <label className="tap hand inline-flex cursor-pointer items-center gap-2 text-lg">
+            <input type="checkbox" checked={hindi} onChange={(e) => setHindi(e.target.checked)} className="size-5 accent-[#F4B400]" />
+            {t("counter.hindi")}
+          </label>
         </div>
       </header>
 
       <section className="teak relative mt-4 rounded-xl px-4 pb-5 pt-6 shadow-lg">
         <div className="relative mx-auto w-full max-w-[300px]">
-          <Printer busy={printing !== "idle"} />
-          {printing !== "idle" && (
-            <div className="absolute inset-x-12 top-[22%]">
-              <p className="mono text-center text-xs text-[#1B1A17]">{printing === "warm" ? t("counter.warm") : t("counter.reading")}</p>
+          {/* the photo's thumbnail slides into the printer's paper slot */}
+          <AnimatePresence>
+            {thumb && (
+              <m.img key={thumb} src={thumb} alt="" aria-hidden="true" className="absolute left-1/2 top-0 z-10 w-16 -translate-x-1/2 rounded-sm border-2 border-[#F6EED9] object-cover shadow-lg" style={{ aspectRatio: "3 / 4" }}
+                initial={{ y: -70, scale: 1.4, opacity: 0, rotate: -6 }} animate={{ y: calm ? -4 : [-70, -40, -4], scale: [1.4, 1, 0.55], opacity: [0, 1, 0], rotate: 0 }} exit={{ opacity: 0 }} transition={{ duration: calm ? 0.25 : 0.9, ease: "easeInOut" }} />
+            )}
+          </AnimatePresence>
+          <Printer busy={busy} />
+          {busy && (
+            <div className="absolute inset-x-12 top-[22%]" role="status" aria-live="polite">
+              <p className="mono text-center text-xs text-[#1B1A17]">
+                {printing === "warm" ? t("counter.warm") : t("counter.reading")}
+                {band && band.of > 1 ? ` · ${band.done}/${band.of}` : ""}
+              </p>
               <div className="mt-1 h-1.5 overflow-hidden rounded bg-[#1B1A1733]">
-                <m.div className="h-full origin-left bg-[var(--chutney)]" animate={{ scaleX: progress }} transition={{ duration: 0.2 }} />
+                <m.div className="h-full origin-left bg-[var(--chutney)]" animate={{ scaleX: printing === "warm" ? Math.max(0.04, progress) : band ? band.done / band.of : 0.05 }} transition={{ duration: 0.2 }} />
               </div>
             </div>
           )}
         </div>
 
-        {/* the printed KOT strip */}
-        <div className="kot torn-bottom relative mx-auto -mt-3 w-[92%] rounded-t px-3 pt-3 shadow-md">
+        {/* the printed KOT strip; two fingers on it undo */}
+        <div className="kot torn-bottom relative mx-auto -mt-3 w-[92%] rounded-t px-3 pt-3 shadow-md" onTouchStart={(e) => { if (e.touches.length === 2) undo(); }}>
           <input
             aria-label={t("counter.restaurant")}
             value={d.restaurant}
@@ -339,22 +542,37 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
             placeholder={t("counter.restaurant")}
             className="mono tap w-full border-b border-dashed border-[#1B1A1755] bg-transparent text-center text-sm uppercase outline-none"
           />
+          {!lines.length && !busy && (
+            <div className="py-3" aria-hidden="true">
+              {[0, 1, 2].map((i) => <div key={i} className="my-3 border-b-2 border-dotted border-[#1B1A1726]" />)}
+              <p className="hand text-center text-base opacity-60">Photo do ya haath se likho, lines yahan chhapengi</p>
+            </div>
+          )}
           <ul className="mt-2">
             <AnimatePresence initial={false}>
               {lines.map((it, i) =>
                 i < visible ? (
-                  <motion.li key={it.id} layout layoutId={`line-${it.id}`} initial={{ y: -28, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ x: -120, opacity: 0, rotate: -4 }} transition={settle}
+                  <motion.li key={it.id} layout layoutId={`line-${it.id}`} initial={{ y: -28, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ x: -120, opacity: 0, rotate: -4 }}
+                    transition={{ ...settle, delay: (arrival.current.get(it.id) ?? 0) * 0.04 }}
+                    onAnimationComplete={() => arrival.current.delete(it.id)}
                     drag={calm ? false : "x"} dragConstraints={{ left: 0, right: 0 }} dragElastic={0.6}
-                    onDragEnd={(_, info) => info.offset.x < -96 && tear(it.id)}
+                    onDragEnd={(_: unknown, info: { offset: { x: number } }) => info.offset.x < -96 && tear(it.id)}
+                    className={dupId === it.id ? "dup-pulse rounded" : undefined}
                   >
                     <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => setEditing(it.id)} className="tap mono flex flex-1 items-center gap-2 text-left text-[13px]">
-                        <span className="flex-1 truncate">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
-                        <span className="opacity-40">.....</span>
-                        <Money p={it.amount} />
+                      <button type="button" onClick={() => setEditing(it.id)} className="tap mono flex min-w-0 flex-1 items-center gap-1.5 text-left text-[13px]">
+                        <span className="min-w-0 truncate">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
+                        <span aria-hidden="true" className="min-w-3 flex-1 translate-y-1 border-b-2 border-dotted border-[#1B1A1740]" />
+                        <span className={`shrink-0 ${meta.current.get(it.id)?.low ? "underline decoration-[var(--haldi)] decoration-2 underline-offset-4" : ""}`}><Money p={it.amount} /></span>
                       </button>
-                      <button type="button" aria-label={`Tear ${it.name}`} onClick={() => tear(it.id)} className="tap grid place-items-center text-lg opacity-60">×</button>
+                      {meta.current.get(it.id)?.low && (
+                        <button type="button" onClick={() => setEditing(it.id)} aria-label={`${it.name}: ${t("counter.unsure")}`} className="tap -ml-1 grid w-7 place-items-center">
+                          <span className="grid size-5 place-items-center rounded-sm bg-[var(--haldi)] text-xs font-bold text-[#1B1A17]">?</span>
+                        </button>
+                      )}
+                      <button type="button" aria-label={`Tear ${it.name}`} onClick={() => tear(it.id)} className="tap grid w-8 place-items-center text-lg opacity-60">×</button>
                     </div>
+                    {dupId === it.id && <p className="hand -mt-1 pb-1 text-sm text-[var(--stamp-red-deep)]">{t("counter.dup")}</p>}
                   </motion.li>
                 ) : null,
               )}
@@ -363,9 +581,9 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
           {d.charges.length > 0 && (
             <ul className="mt-2 border-t border-dashed border-[#1B1A1755] pt-2">
               {d.charges.map((c) => (
-                <li key={c.id} className="mono flex justify-between text-[13px] opacity-80">
-                  <span>{c.label}</span>
-                  <Money p={bill.chargeAmounts[c.id] ?? 0} />
+                <li key={c.id} className="mono flex justify-between gap-2 text-[13px] opacity-80">
+                  <span className="min-w-0 truncate">{c.label}</span>
+                  <Money p={bill.chargeAmounts[c.id] ?? 0} className="shrink-0" />
                 </li>
               ))}
             </ul>
@@ -382,7 +600,7 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
               placeholder="0.00"
             />
           </div>
-          {d.printedTotal != null && gap !== 0 && lines.length > 0 && (
+          {d.printedTotal != null && gap !== 0 && lines.length > 0 && !busy && (
             <div role="status" className="mt-2 rounded bg-[var(--haldi)] px-2 py-1.5 text-sm text-[#1B1A17]">
               <Money p={Math.abs(gap)} /> {gap > 0 ? t("reconcile.short") : t("reconcile.over")}
               {gap > 0 && (
@@ -392,11 +610,21 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
               )}
             </div>
           )}
+          {hindiHint && !busy && lastScan.current && (
+            <button type="button" onClick={() => scan(lastScan.current!.file, "eng+hin")} className="tap press hand mt-2 w-full rounded border-2 border-dashed border-[#1B1A17] text-lg font-bold">
+              {t("counter.hindiAsk")}
+            </button>
+          )}
         </div>
         <AnimatePresence>
           {scrap && (
-            <m.button type="button" onClick={tape} initial={{ y: -20, opacity: 0, rotate: -8 }} animate={{ y: 0, opacity: 1, rotate: -4 }} exit={{ opacity: 0 }} className="kot tap press mono absolute bottom-3 left-3 rounded px-3 py-2 text-xs shadow-lg">
-              {scrap.item.name} · tape back (5s)
+            <m.button type="button" onClick={tape} initial={{ y: -20, opacity: 0, rotate: -8 }} animate={{ y: 0, opacity: 1, rotate: -4 }} exit={{ opacity: 0 }} className="kot tap press mono absolute bottom-3 left-3 flex items-center gap-2 rounded px-3 py-2 text-xs shadow-lg">
+              {/* the 5 s ring runs out while the scrap waits to be taped back */}
+              <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" className="-rotate-90">
+                <circle cx="10" cy="10" r="8" fill="none" stroke="#1B1A1733" strokeWidth="2.5" />
+                <m.circle cx="10" cy="10" r="8" fill="none" stroke="var(--stamp-red-deep)" strokeWidth="2.5" strokeDasharray="50.3" initial={{ strokeDashoffset: 0 }} animate={{ strokeDashoffset: 50.3 }} transition={{ duration: 5, ease: "linear" }} />
+              </svg>
+              {scrap.item.name} · tape back
             </m.button>
           )}
         </AnimatePresence>
@@ -412,11 +640,19 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addQuick(); } }}
           rows={2}
           placeholder={t("counter.quickHint")}
+          autoComplete="off"
           className="kot mono mt-1 w-full rounded-md p-3 text-sm outline-none"
         />
+        {sugg.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1.5" aria-label="Pehle likhe hue naam">
+            {sugg.map((n) => (
+              <button key={n} type="button" onClick={() => pick(n)} className="tap press hand rounded-sm border-b-2 border-dotted border-current px-2 text-lg">{n}</button>
+            ))}
+          </div>
+        )}
         <div className="mt-1 flex flex-wrap gap-2">
           {parseQuick(quick).map((p, i) => (
-            <span key={i} className="kot mono inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs"><Katori size={18} />{p.qty > 1 ? `${p.qty}x ` : ""}{p.name} <Money p={p.amount} /></span>
+            <m.span key={`${i}-${p.name}`} initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={snap} className="kot mono inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs"><Katori size={18} />{p.qty > 1 ? `${p.qty}x ` : ""}{p.name} <Money p={p.amount} /></m.span>
           ))}
         </div>
         <button type="button" onClick={addQuick} className="tap press mt-2 rounded-md bg-[var(--ink-on-bg)] px-4 font-semibold text-[var(--bg)]">{t("counter.addLine")}</button>
@@ -445,53 +681,78 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
       </section>
 
       <div className="fixed inset-x-0 bottom-0 z-30 mx-auto flex max-w-xl gap-2 px-4 pb-4 pt-2" style={{ background: "linear-gradient(transparent, var(--bg) 35%)" }}>
-        <button type="button" onClick={undo} onContextMenu={(e) => { e.preventDefault(); redo(); }} className="tap press kot rounded-md px-3 font-semibold">{t("undo")}</button>
-        <button type="button" disabled={!d.items.length} onClick={goTable} className="tap press flex-1 rounded-md bg-[var(--stamp-red-deep)] px-4 text-lg font-semibold text-[#F6EED9] disabled:opacity-40">
+        <UndoToken undo={undo} redo={redo} label={t("undo")} />
+        <button type="button" disabled={!d.items.length || busy} onClick={goTable} className="tap press flex-1 rounded-md bg-[var(--stamp-red-deep)] px-4 text-lg font-semibold text-[#F6EED9] disabled:opacity-40">
           {t("counter.toTable")}
         </button>
       </div>
 
       <AnimatePresence>
-        {editing && <LinePad key={editing} d={d} id={editing} onClose={() => setEditing(null)} update={update} />}
+        {editing && (
+          <LinePad
+            key={editing}
+            d={d}
+            id={editing}
+            crop={meta.current.get(editing)?.crop}
+            onClose={() => setEditing(null)}
+            onDone={() => {
+              const mt = meta.current.get(editing);
+              if (mt?.low) meta.current.set(editing, { ...mt, low: false });
+              bump((n) => n + 1);
+            }}
+            update={update}
+          />
+        )}
       </AnimatePresence>
     </main>
   );
 }
 
-function LinePad({ d, id, onClose, update }: { d: Draft; id: string; onClose: () => void; update: (fn: (d: Draft) => Draft) => void }) {
+function LinePad({ d, id, crop, onClose, onDone, update }: { d: Draft; id: string; crop?: string; onClose: () => void; onDone: () => void; update: (fn: (d: Draft) => Draft) => void }) {
+  const { t } = usePrefs();
   const it = d.items.find((i) => i.id === id);
   const [val, setVal] = useState(it ? (it.amount / 100).toFixed(2) : "");
   const [name, setName] = useState(it?.name ?? "");
   const [qty, setQty] = useState(it?.qty ?? 1);
+  const nameRef = useRef<HTMLInputElement>(null);
   if (!it) return null;
   const commit = () => {
     const p = toPaise(val);
     update((x) => ({ ...x, items: x.items.map((i) => (i.id === id ? { ...i, name: name.trim().slice(0, 60) || i.name, qty, amount: p ?? i.amount } : i)) }));
+    onDone();
     onClose();
   };
   const key = (k: string) => setVal((v) => (k === "back" ? v.slice(0, -1) : k === "." && v.includes(".") ? v : (v + k).slice(0, 10)));
   return (
     <m.div className="fixed inset-0 z-50 flex items-end bg-[#0008]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-      <m.div role="dialog" aria-modal="true" aria-label="Line edit" className="teak mx-auto w-full max-w-xl rounded-t-2xl p-4" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e) => e.stopPropagation()}>
-        <m.div className="kot mono rounded p-3 text-sm" initial={{ rotateX: 180 }} animate={{ rotateX: 0 }} transition={snap}>
-          <input aria-label="Naam" value={name} onChange={(e) => setName(e.target.value)} className="tap w-full bg-transparent outline-none" />
+      <m.div role="dialog" aria-modal="true" aria-label="Line edit" className="teak mx-auto w-full max-w-xl rounded-t-2xl p-4" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e: React.MouseEvent) => e.stopPropagation()} style={{ perspective: 900 }}>
+        <m.div className="kot mono rounded p-3 text-sm" initial={{ rotateX: 180 }} animate={{ rotateX: 0 }} transition={snap} style={{ transformOrigin: "50% 100%" }}>
+          {crop && (
+            <figure className="-mx-1 mb-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={crop} alt={`${t("counter.photoLine")}: ${it.name}`} className="w-full rounded-sm border border-[#1B1A1740] bg-white" />
+              <figcaption className="hand mt-0.5 text-xs opacity-70">{t("counter.photoLine")}</figcaption>
+            </figure>
+          )}
+          <input ref={nameRef} aria-label="Naam" value={name} onChange={(e) => setName(e.target.value)} className="tap w-full bg-transparent outline-none" />
           <div className="mt-1 flex items-center justify-between">
             <div className="flex items-center gap-1">
-              <button type="button" className="tap press rounded border" onClick={() => setQty((q) => Math.max(1, q - 1))}>−</button>
+              <button type="button" aria-label="Ek kam" className="tap press rounded border" onClick={() => setQty((q) => Math.max(1, q - 1))}>−</button>
               <span className="w-8 text-center">{qty}x</span>
-              <button type="button" className="tap press rounded border" onClick={() => setQty((q) => Math.min(99, q + 1))}>+</button>
+              <button type="button" aria-label="Ek zyada" className="tap press rounded border" onClick={() => setQty((q) => Math.min(99, q + 1))}>+</button>
             </div>
-            <span className="text-2xl"><span className="rupee">₹</span>{val || "0"}</span>
+            <span className="text-2xl" aria-live="polite"><span className="rupee">₹</span>{val || "0"}</span>
           </div>
         </m.div>
         <div className="mt-3 grid grid-cols-4 gap-2">
           {["1", "2", "3", "back", "4", "5", "6", ".", "7", "8", "9", "0"].map((k) => (
-            <button key={k} type="button" onClick={() => key(k)} className="tap press steel mono rounded-lg text-xl text-[#1B1A17]">{k === "back" ? "⌫" : k}</button>
+            <button key={k} type="button" aria-label={k === "back" ? "Mitao" : k} onClick={() => key(k)} className="tap press steel mono rounded-lg text-xl text-[#1B1A17]">{k === "back" ? "⌫" : k}</button>
           ))}
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-2 text-sm font-semibold">
+        <div className="mt-3 grid grid-cols-2 gap-2 text-sm font-semibold sm:grid-cols-4">
+          <button type="button" className="tap press kot rounded-md" onClick={() => { nameRef.current?.focus(); nameRef.current?.select(); }}>Naam badlo</button>
           <button type="button" className="tap press kot rounded-md" onClick={() => { update((x) => { const i = x.items.findIndex((y) => y.id === id); const a = x.items[i]; const half = Math.floor(a.amount / 2); x.items.splice(i, 1, { ...a, amount: a.amount - half }, { ...a, id: uid(), amount: half }); return x; }); onClose(); }}>Do mein todo</button>
-          <button type="button" className="tap press kot rounded-md" onClick={() => { update((x) => { const i = x.items.findIndex((y) => y.id === id); const a = x.items[i], b = x.items[i + 1]; if (b) x.items.splice(i, 2, { ...a, name: `${a.name} ${b.name}`.slice(0, 60), amount: a.amount + b.amount }); return x; }); onClose(); }}>Agle se jodo</button>
+          <button type="button" className="tap press kot rounded-md disabled:opacity-40" disabled={d.items.findIndex((y) => y.id === id) === d.items.length - 1} onClick={() => { update((x) => { const i = x.items.findIndex((y) => y.id === id); const a = x.items[i], b = x.items[i + 1]; if (b) x.items.splice(i, 2, { ...a, name: `${a.name} ${b.name}`.slice(0, 60), amount: a.amount + b.amount }); return x; }); onClose(); }}>Agle se jodo</button>
           <button type="button" className="tap press rounded-md bg-[var(--chutney-deep)] text-white" onClick={commit}>Ho gaya</button>
         </div>
       </m.div>
@@ -499,21 +760,38 @@ function LinePad({ d, id, onClose, update }: { d: Draft; id: string; onClose: ()
   );
 }
 
+/** The chalk board and an empty printer with a blank strip, at their final sizes, while the draft loads. */
 function CounterSkeleton() {
   return (
-    <main className="mx-auto max-w-xl px-4 pt-4" aria-busy="true">
-      <div className="chalk h-44 rounded-xl" />
-      <div className="teak mt-4 h-80 rounded-xl p-6"><div className="kot mx-auto h-full w-[92%] rounded opacity-70" /></div>
+    <main className="mx-auto max-w-xl px-4 pt-4" aria-busy="true" aria-label="Counter lag raha hai">
+      <div className="chalk h-44 rounded-xl p-4">
+        <div className="h-9 w-40 rounded bg-[#F4B40033]" />
+        <div className="mt-6 grid grid-cols-3 gap-2">{[0, 1, 2].map((i) => <div key={i} className="h-14 rounded-lg border border-dashed border-[#f1ecdf40]" />)}</div>
+      </div>
+      <div className="teak mt-4 rounded-xl px-4 pb-5 pt-6">
+        <div className="steel mx-auto h-28 w-[86%] max-w-[300px] rounded-2xl opacity-60" />
+        <div className="kot torn-bottom mx-auto -mt-3 w-[92%] rounded-t px-3 pt-3">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="my-4 border-b-2 border-dotted border-[#1B1A1726]" />)}
+        </div>
+      </div>
     </main>
   );
 }
+
 
 /* ----------------------------- TABLE ----------------------------- */
 export function Table({ localId }: { localId: string }) {
   const { t, calm } = usePrefs();
   const router = useRouter();
-  const { d, update, undo } = useDraft(localId, false);
+  const { d, update, undo, redo } = useDraft(localId, false);
   const [sel, setSel] = useState<string | null>(null);
+  const [allSheet, setAllSheet] = useState(false);
+  // a shared katori is tied to its thalis by a dashed ink line for 600 ms
+  const [tie, setTie] = useState<{ itemId: string; k: number } | null>(null);
+  const [canContacts, setCanContacts] = useState(false);
+  const katoris = useRef(new Map<string, HTMLElement>());
+  const press = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressed = useRef(false);
   const [weights, setWeights] = useState<string | null>(null);
   const [friend, setFriend] = useState("");
   const [nag, setNag] = useState(false);
@@ -532,18 +810,44 @@ export function Table({ localId }: { localId: string }) {
         if (j.user && j.groups?.length) setTiffins(j.groups);
       })
       .catch(() => {});
+    // Android Chrome's contact picker: names only, never numbers
+    setCanContacts("contacts" in navigator && "ContactsManager" in window);
   }, []);
+  useEffect(() => {
+    if (!tie) return;
+    const timer = setTimeout(() => setTie(null), 650);
+    return () => clearTimeout(timer);
+  }, [tie]);
   const bill = useMemo(() => (d ? computeBill({ members: d.members, items: d.items, charges: [], claims: d.claims, printedTotal: null }) : null), [d]);
+  // sent back from "Room kholo" with items nobody took: say so and go to the first one
+  const nagged = useRef(false);
+  useEffect(() => {
+    if (!d || !bill || nagged.current) return;
+    nagged.current = true;
+    if (new URLSearchParams(window.location.search).get("nag") !== "1") return;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (bill.unclaimed.length) {
+      setNag(true);
+      setSel(bill.unclaimed[0]);
+      setTimeout(() => katoris.current.get(bill.unclaimed[0])?.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "center" }), 120);
+    }
+  }, [d, bill, calm]);
   if (!d || !bill) return <TableSkeleton />;
+  const holders = (itemId: string) => d.claims.filter((c) => c.itemId === itemId).length;
 
-  const toggle = (itemId: string, memberId: string) =>
+  const toggle = (itemId: string, memberId: string) => {
+    const had = d.claims.some((c) => c.itemId === itemId && c.memberId === memberId);
+    if (!had && holders(itemId) >= 1) setTie({ itemId, k: Date.now() });
     update((x) => {
       const has = x.claims.some((c) => c.itemId === itemId && c.memberId === memberId);
       x.claims = has ? x.claims.filter((c) => !(c.itemId === itemId && c.memberId === memberId)) : [...x.claims, { itemId, memberId, weight: 1 }];
       return x;
     });
-  const assign = (itemId: string, memberId: string) =>
+  };
+  const assign = (itemId: string, memberId: string) => {
+    if (!d.claims.some((c) => c.itemId === itemId && c.memberId === memberId) && holders(itemId) >= 1) setTie({ itemId, k: Date.now() });
     update((x) => (x.claims.some((c) => c.itemId === itemId && c.memberId === memberId) ? x : { ...x, claims: [...x.claims, { itemId, memberId, weight: 1 }] }));
+  };
   /** The thali nearest the pointer, if the pointer is on it or within 64 px of its rim. */
   const nearest = (pt: { x: number; y: number }) => {
     const x = pt.x - window.scrollX;
@@ -561,8 +865,17 @@ export function Table({ localId }: { localId: string }) {
     return best;
   };
   const everyone = () => {
-    if (sel) update((x) => ({ ...x, claims: [...x.claims.filter((c) => c.itemId !== sel), ...x.members.map((mm) => ({ itemId: sel, memberId: mm.id, weight: 1 }))] }));
-    else update((x) => ({ ...x, claims: [...x.claims, ...bill.unclaimed.flatMap((iid) => x.members.map((mm) => ({ itemId: iid, memberId: mm.id, weight: 1 })))] }));
+    if (!sel) return setAllSheet(true);
+    if (d.members.length > 1) setTie({ itemId: sel, k: Date.now() });
+    update((x) => ({ ...x, claims: [...x.claims.filter((c) => c.itemId !== sel), ...x.members.map((mm) => ({ itemId: sel, memberId: mm.id, weight: 1 }))] }));
+  };
+  const fromContacts = async () => {
+    try {
+      const nav = navigator as Navigator & { contacts?: { select: (props: string[], opts?: { multiple?: boolean }) => Promise<{ name?: string[] }[]> } };
+      const picked = (await nav.contacts?.select(["name"], { multiple: true })) ?? [];
+      const names = picked.map((c) => (c.name?.[0] ?? "").trim().slice(0, 24)).filter(Boolean);
+      if (names.length) update((x) => ({ ...x, members: [...x.members, ...names.slice(0, 20 - x.members.length).map((n, i) => ({ id: uid(), seat: x.members.length + 1 + i, name: n }))] }));
+    } catch {}
   };
   const addFriend = () => {
     const n = friend.trim().slice(0, 24);
@@ -596,7 +909,7 @@ export function Table({ localId }: { localId: string }) {
         )}
 
         {/* thalis in a ring */}
-        <div className="mt-3 grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4" style={{ transform: calm ? undefined : "perspective(900px) rotateX(6deg)" }}>
+        <div className="relative mt-3 grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4" style={{ transform: calm ? undefined : "perspective(900px) rotateX(6deg)" }}>
           {d.members.map((mm) => {
             const has = sel ? d.claims.some((c) => c.itemId === sel && c.memberId === mm.id) : false;
             const total = bill.perMember[mm.id]?.items ?? 0;
@@ -608,14 +921,30 @@ export function Table({ localId }: { localId: string }) {
                   <Thali seat={mm.seat} name={mm.name} size={86} active={has || near} glow={!!sel || dragging} />
                 </m.span>
                 <span className="hand -mt-1 text-lg font-bold" style={{ color: ink(mm.seat).text }}>{mm.name}</span>
-                <Money p={total} className="text-sm text-[#1B1A17]" />
+                <Odometer p={total} className="text-sm text-[#1B1A17]" />
               </m.button>
             );
           })}
           <div className="flex flex-col items-center justify-center gap-1">
             <input aria-label={t("table.friendName")} value={friend} onChange={(e) => setFriend(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFriend()} placeholder={t("table.friendName")} className="kot tap hand w-24 rounded px-2 text-center" />
             <button type="button" onClick={addFriend} className="tap press rounded-full bg-[#1B1A17] px-3 font-semibold text-[#F6EED9]">{t("table.addFriend")}</button>
+            {canContacts && d.members.length < 20 && (
+              <button type="button" onClick={fromContacts} className="tap press hand text-base text-[#1B1A17] underline underline-offset-4">{t("table.contacts")}</button>
+            )}
           </div>
+          {tie && !calm && (() => {
+            const pts = d.claims
+              .filter((c) => c.itemId === tie.itemId)
+              .map((c) => plates.current.get(c.memberId))
+              .filter((el): el is HTMLElement => !!el)
+              .map((el) => `${el.offsetLeft + el.offsetWidth / 2} ${el.offsetTop + 43}`);
+            if (pts.length < 2) return null;
+            return (
+              <svg key={tie.k} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+                <path d={`M${pts.join(" L")}`} fill="none" stroke="#1B1A17" strokeWidth="2.5" strokeDasharray="7 6" strokeLinecap="round" strokeLinejoin="round" className="ink-tie" />
+              </svg>
+            );
+          })()}
         </div>
         <p className="sr-only" aria-live="polite">{d.members.map((mm) => `${mm.name}: ₹${((bill.perMember[mm.id]?.items ?? 0) / 100).toFixed(2)}`).join(", ")}</p>
 
@@ -629,14 +958,22 @@ export function Table({ localId }: { localId: string }) {
               const un = cl.length === 0;
               const active = sel === it.id;
               return (
-                <li key={it.id}>
+                <li key={it.id} className="relative" ref={(el: HTMLLIElement | null) => { if (el) katoris.current.set(it.id, el); else katoris.current.delete(it.id); }}>
                   <motion.button layoutId={`line-${it.id}`} type="button"
-                    onClick={() => { if (dragged.current) return; setSel(active ? null : it.id); }}
+                    onPointerDown={() => {
+                      longPressed.current = false;
+                      if (press.current) clearTimeout(press.current);
+                      // hold a placed katori for 450 ms to cut its roti into uneven shares
+                      if (cl.length > 1) press.current = setTimeout(() => { longPressed.current = true; setWeights(it.id); }, 450);
+                    }}
+                    onPointerUp={() => press.current && clearTimeout(press.current)}
+                    onPointerCancel={() => press.current && clearTimeout(press.current)}
+                    onClick={() => { if (dragged.current || longPressed.current) return void (longPressed.current = false); setSel(active ? null : it.id); }}
                     drag={!calm} dragSnapToOrigin dragMomentum={false} dragElastic={1}
                     whileDrag={{ scale: 1.08, zIndex: 40, boxShadow: "6px 12px 18px rgba(27,26,23,.28)" }}
-                    onDragStart={() => { dragged.current = true; setDragging(true); setSel(null); }}
-                    onDrag={(_, info) => setHover(nearest(info.point))}
-                    onDragEnd={(_, info) => {
+                    onDragStart={() => { if (press.current) clearTimeout(press.current); dragged.current = true; setDragging(true); setSel(null); }}
+                    onDrag={(_: unknown, info: { point: { x: number; y: number } }) => setHover(nearest(info.point))}
+                    onDragEnd={(_: unknown, info: { point: { x: number; y: number } }) => {
                       const to = nearest(info.point);
                       setHover(null);
                       setDragging(false);
@@ -655,6 +992,9 @@ export function Table({ localId }: { localId: string }) {
                     </span>
                     <span className="flex">{cl.map((c) => { const mm = d.members.find((x) => x.id === c.memberId); return mm ? <Pattern key={c.memberId} seat={mm.seat} size={14} /> : null; })}</span>
                   </motion.button>
+                  {cl.length > 1 && !dragging && (
+                    <button type="button" onClick={() => setWeights(it.id)} aria-label={`${it.name}: ${t("table.weights")}`} className="press absolute -right-1.5 -top-2.5 grid size-8 place-items-center rounded-full border-2 border-[#1B1A17] bg-[var(--haldi)] text-sm font-extrabold text-[#1B1A17] shadow">½</button>
+                  )}
                 </li>
               );
             })}
@@ -679,7 +1019,7 @@ export function Table({ localId }: { localId: string }) {
             <p className="font-semibold">{bill.unclaimed.length} {t("table.unclaimed")}</p>
             <div className="mt-2 flex gap-2">
               <button type="button" className="tap press rounded-md bg-[#1B1A17] px-3 font-semibold text-[#F6EED9]" onClick={() => { update((x) => ({ ...x, claims: [...x.claims, ...bill.unclaimed.map((iid) => ({ itemId: iid, memberId: x.members[0].id, weight: 1 }))] })); setNag(false); }}>{t("table.mine")}</button>
-              <button type="button" className="tap press rounded-md border border-[#1B1A17] px-3" onClick={() => { setSel(bill.unclaimed[0]); setNag(false); }}>OK</button>
+              <button type="button" className="tap press rounded-md border border-[#1B1A17] px-3" onClick={() => { const first = bill.unclaimed[0]; setSel(first); setNag(false); katoris.current.get(first)?.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "center" }); }}>OK</button>
             </div>
           </m.div>
         )}
@@ -687,11 +1027,24 @@ export function Table({ localId }: { localId: string }) {
 
       <div className="fixed inset-x-0 bottom-0 z-30 mx-auto grid max-w-xl grid-cols-[auto_auto_1fr] gap-2 px-4 pb-4 pt-6" style={{ background: "linear-gradient(transparent, var(--formica) 30%)" }}>
         <button type="button" onClick={everyone} className="tap press rounded-md border-2 border-[var(--stamp-red-deep)] bg-[#fffaf0] px-3 font-bold text-[var(--stamp-red-deep)]" style={{ transform: "rotate(-3deg)" }}>{t("table.everyone")}</button>
-        <button type="button" onClick={undo} className="tap press kot rounded-md px-3 font-semibold">{t("undo")}</button>
+        <UndoToken undo={undo} redo={redo} label={t("undo")} />
         <button type="button" onClick={() => next(`/bill/${d.id}/masala`)} className="tap press rounded-md bg-[var(--stamp-red-deep)] px-3 text-lg font-semibold text-[#F6EED9]">{t("table.masala")}</button>
       </div>
 
       <AnimatePresence>{weights && <Roti key={weights} d={d} itemId={weights} onClose={() => setWeights(null)} update={update} />}</AnimatePresence>
+      <AnimatePresence>
+        {allSheet && (
+          <EveryoneSheet
+            d={d}
+            unclaimed={bill.unclaimed}
+            onClose={() => setAllSheet(false)}
+            onGive={(ids) => {
+              update((x) => ({ ...x, claims: [...x.claims.filter((c) => !ids.includes(c.itemId)), ...ids.flatMap((iid) => x.members.map((mm) => ({ itemId: iid, memberId: mm.id, weight: 1 })))] }));
+              setAllSheet(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {tiffinSheet && tiffins && (
           <TiffinSheet
@@ -705,6 +1058,44 @@ export function Table({ localId }: { localId: string }) {
         )}
       </AnimatePresence>
     </main>
+  );
+}
+
+/** "Kaunsi cheez sab ki?": tick the unclaimed items the whole table shared, and every seat gets them. */
+function EveryoneSheet({ d, unclaimed, onClose, onGive }: { d: Draft; unclaimed: string[]; onClose: () => void; onGive: (ids: string[]) => void }) {
+  const { t } = usePrefs();
+  const [on, setOn] = useState<string[]>([]);
+  const items = unclaimed.map((id) => d.items.find((i) => i.id === id)).filter((i): i is Item => !!i);
+  return (
+    <m.div className="fixed inset-0 z-50 flex items-end bg-[#0008]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      <m.div role="dialog" aria-modal="true" aria-label={t("table.whichAll")} className="kot mx-auto w-full max-w-xl rounded-t-2xl px-4 pb-6 pt-4" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+        <h2 className="display text-3xl">{t("table.whichAll")}</h2>
+        {items.length === 0 ? (
+          <p className="hand mt-3 text-lg">{t("table.allNone")}</p>
+        ) : (
+          <ul className="mt-2 max-h-[50vh] divide-y divide-dashed divide-[#1B1A1740] overflow-auto">
+            {items.map((it) => (
+              <li key={it.id}>
+                <label className="tap flex cursor-pointer items-center gap-3">
+                  <input type="checkbox" checked={on.includes(it.id)} onChange={() => setOn((x) => (x.includes(it.id) ? x.filter((y) => y !== it.id) : [...x, it.id]))} className="size-5 accent-[#A61E1E]" />
+                  <Katori size={26} />
+                  <span className="mono min-w-0 flex-1 truncate text-sm">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
+                  <Money p={it.amount} className="shrink-0 text-sm" />
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-3 flex gap-2">
+          <button type="button" onClick={onClose} className="tap press rounded-md border border-[#1B1A17] px-4 font-semibold">{t("khata.no")}</button>
+          {items.length > 0 && (
+            <button type="button" disabled={!on.length} onClick={() => onGive(on)} className="tap press flex-1 rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] disabled:opacity-40">
+              {t("table.giveAll")} ({d.members.length})
+            </button>
+          )}
+        </div>
+      </m.div>
+    </m.div>
   );
 }
 
@@ -839,7 +1230,7 @@ const KINDS: ChargeKind[] = ["cgst", "sgst", "igst", "vat", "service", "packing"
 export function Shelf({ localId }: { localId: string }) {
   const { t, calm, lite } = usePrefs();
   const router = useRouter();
-  const { d, update, undo } = useDraft(localId, false);
+  const { d, update, undo, redo } = useDraft(localId, false);
   const [open, setOpen] = useState<string | null>(null);
   // the jar being poured, kept for 2 s so every thali can show what landed in it
   const [poured, setPoured] = useState<{ id: string; k: number } | null>(null);
@@ -862,6 +1253,8 @@ export function Shelf({ localId }: { localId: string }) {
   const openRoom = async () => {
     setErr("");
     if (bill.unclaimed.length) return setErr(`${bill.unclaimed.length} ${t("table.unclaimed")}`);
+    if (!payee.trim()) return setErr("Apna naam likho, dost ke UPI app mein yahi dikhega.");
+    if (!d.demo && !/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(vpa)) return setErr("UPI ID sahi nahi lag raha. Jaise: naam@okicici");
     setBusy(true);
     try {
       await kvSet("host", { vpa, payee });
@@ -1019,9 +1412,16 @@ export function Shelf({ localId }: { localId: string }) {
               <button type="button" onClick={() => update(detachGroup)} className="tap underline underline-offset-4">Mat likho</button>
             </p>
           )}
-          {err && <p role="alert" className="mt-2 font-semibold text-[#FF8F85]">{err}</p>}
+          {err && (
+            <p role="alert" className="mt-2 font-semibold text-[#FF8F85]">
+              {err}
+              {bill.unclaimed.length > 0 && (
+                <button type="button" onClick={() => router.push(`/bill/${d.id}?nag=1`)} className="tap ml-2 underline underline-offset-4">Table pe dikhao</button>
+              )}
+            </p>
+          )}
           <div className="mt-3 flex gap-2">
-            <button type="button" onClick={undo} className="tap press kot rounded-md px-3 font-semibold">{t("undo")}</button>
+            <UndoToken undo={undo} redo={redo} label={t("undo")} className="text-[#1B1A17]" />
             <button type="button" disabled={busy} onClick={openRoom} className="tap press flex-1 rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] disabled:opacity-50">{busy ? "..." : t("room.open")}</button>
           </div>
           <a href={`/bill/${d.id}`} className="tap mt-2 inline-flex items-center text-sm underline">{t("table.title")}</a>

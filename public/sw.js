@@ -5,8 +5,8 @@
 // - The OCR scripts and data from jsDelivr are cached after the first scan, so scanning works offline next time.
 // - A photo shared into the app (Android share sheet) is caught here and handed to the Counter. It never leaves the phone.
 // - API calls are never cached: room ops wait in the page's IndexedDB queue instead.
-const SHELL = "kp-shell-v2";
-const STATIC = "kp-static-v1";
+const SHELL = "kp-shell-v3";
+const STATIC = "kp-static-v2";
 const OCR = "kp-ocr-v1";
 const SHARE = "kp-share";
 const PAGES = ["/", "/demo", "/offline", "/bill/_", "/bill/_/masala"];

@@ -9,7 +9,14 @@ export interface RoomMember extends Member {
   /** set when the room was opened from a Khata group: this seat's person in that group */
   personId?: string | null;
 }
-export interface Payment { state: PayState; amount: number | null; sentAt: string | null; confirmedAt: string | null }
+export interface Payment {
+  state: PayState;
+  amount: number | null;
+  sentAt: string | null;
+  confirmedAt: string | null;
+  /** set when the host tapped "Nahi aaya", so the guest is told; cleared when they send again */
+  rejectedAt?: string | null;
+}
 
 export interface RoomState {
   status: RoomStatus;
@@ -210,7 +217,7 @@ export function applyOp(prev: RoomState, op: Op, actor: Actor, now = new Date().
       if (p.state === "received" || p.state === "cash") return { ok: false, reason: "already_settled" };
       if (op.type === "mark_sent") {
         const bill = billOf(s);
-        s.payments[memberId] = { ...p, state: "sent", amount: bill.perMember[memberId]?.total ?? 0, sentAt: now };
+        s.payments[memberId] = { ...p, state: "sent", amount: bill.perMember[memberId]?.total ?? 0, sentAt: now, rejectedAt: null };
       } else s.payments[memberId] = { ...p, state: "unpaid", sentAt: null };
       return { ok: true, state: s };
     }
@@ -223,7 +230,7 @@ export function applyOp(prev: RoomState, op: Op, actor: Actor, now = new Date().
       if (!memberById(memberId)) return { ok: false, reason: "not_found" };
       const p = s.payments[memberId] ?? { state: "unpaid", amount: null, sentAt: null, confirmedAt: null };
       const amt = billOf(s).perMember[memberId]?.total ?? 0;
-      if (op.type === "reject_received") s.payments[memberId] = { ...p, state: "unpaid", confirmedAt: null };
+      if (op.type === "reject_received") s.payments[memberId] = { ...p, state: "unpaid", confirmedAt: null, rejectedAt: now };
       else s.payments[memberId] = { ...p, state: op.type === "mark_cash" ? "cash" : "received", amount: p.amount ?? amt, confirmedAt: now };
       return { ok: true, state: s };
     }

@@ -173,3 +173,17 @@ html[data-fast] .scene-in { animation-duration: 150ms; }
 @media (prefers-reduced-motion: reduce) {
   .scene-in { animation: none; }
 }
+/* odometer: one 0-9 strip per digit, slid into place */
+.odo-col { display: inline-block; height: 1.2em; line-height: 1.2em; overflow: hidden; vertical-align: bottom; }
+.odo-strip { display: flex; flex-direction: column; transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.odo-strip > span { height: 1.2em; }
+/* the line most likely read twice pulses once */
+@keyframes dup-pulse { 0%, 100% { background: transparent; } 30%, 60% { background: rgba(244, 180, 0, 0.55); } }
+.dup-pulse { animation: dup-pulse 1.2s ease-in-out 1; }
+/* the dashed ink line that ties a shared katori to its thalis for a moment */
+@keyframes ink-tie { from { stroke-dashoffset: 40; opacity: 1; } 70% { opacity: 1; } to { stroke-dashoffset: 0; opacity: 0; } }
+.ink-tie { animation: ink-tie 600ms ease-out forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .odo-strip { transition: none; }
+  .dup-pulse, .ink-tie { animation: none; }
+}

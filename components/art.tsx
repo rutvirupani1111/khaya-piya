@@ -168,3 +168,33 @@ export function Money({ p, sign, className }: { p: number; sign?: boolean; class
     </span>
   );
 }
+
+/**
+ * A running total that rolls like a shop counter: each digit column slides to its new number in 150 ms.
+ * The figure is read out once as text; the rolling columns are hidden from screen readers.
+ */
+export function Odometer({ p, className }: { p: number; className?: string }) {
+  const v = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(p) / 100);
+  return (
+    <span className={className}>
+      <span className="sr-only">₹{v}</span>
+      <span aria-hidden="true" className="inline-flex items-baseline">
+        {p < 0 && "−"}
+        <span className="rupee">₹</span>
+        <span className="mono inline-flex">
+          {[...v].map((ch, i) =>
+            /\d/.test(ch) ? (
+              <span key={`${v.length - i}`} className="odo-col">
+                <span className="odo-strip" style={{ transform: `translateY(-${Number(ch) * 10}%)` }}>
+                  {"0123456789".split("").map((n) => <span key={n}>{n}</span>)}
+                </span>
+              </span>
+            ) : (
+              <span key={`${v.length - i}`}>{ch}</span>
+            ),
+          )}
+        </span>
+      </span>
+    </span>
+  );
+}

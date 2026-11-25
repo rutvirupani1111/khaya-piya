@@ -11,6 +11,8 @@ export interface ParsedLine {
   chargeKind?: ChargeKind;
   percentBp?: number;
   conf?: number;
+  /** index of the source line among the bill's non-empty lines, so a scan can find that line's photo crop */
+  src?: number;
   raw: string;
 }
 
@@ -72,7 +74,7 @@ export function parseBill(text: string): { lines: ParsedLine[]; subtotal: number
     let head = l.slice(0, m.index).trim().replace(/[.:=\-–]+$/, "").trim();
     if (/grand\s*total|net\s*amount|total\s*payable|amount\s*payable|net\s*payable/i.test(head)) {
       total = amount;
-      lines.push({ type: "total", name: head, qty: 1, rate: null, amount, raw: l });
+      lines.push({ type: "total", name: head, qty: 1, rate: null, amount, src: i, raw: l });
       continue;
     }
     if (/sub\s*-?\s*total/i.test(head) || (/^total\b/i.test(head) && !seenCharge)) {
@@ -97,6 +99,7 @@ export function parseBill(text: string): { lines: ParsedLine[]; subtotal: number
         amount: ck[1] === "discount" ? -Math.abs(amount) : amount,
         chargeKind: ck[1],
         percentBp: pm ? Math.round(Number(pm[1]) * 100) : undefined,
+        src: i,
         raw: l,
       });
       continue;
@@ -127,7 +130,7 @@ export function parseBill(text: string): { lines: ParsedLine[]; subtotal: number
     }
     name = name.replace(/^\d+[.)]\s*/, "").replace(/\s{2,}/g, " ").trim().slice(0, 60);
     if (!name) continue;
-    lines.push({ type: "item", name, qty: Math.max(1, Math.min(99, qty)), rate, amount, kind: classify(name), raw: l });
+    lines.push({ type: "item", name, qty: Math.max(1, Math.min(99, qty)), rate, amount, kind: classify(name), src: i, raw: l });
   }
   return { lines, subtotal, total, restaurant };
 }
