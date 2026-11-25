@@ -950,23 +950,33 @@ export function Shelf({ localId }: { localId: string }) {
               const width = Math.max(2, Math.min(14, Math.round((14 * Math.abs(got)) / most)));
               return (
                 <li key={mm.id} className="kot relative rounded-lg p-2 text-xs">
-                  {pc && got !== 0 && (
-                    <>
-                      {/* the pour: a stream as wide as this thali's share drops in (a discount flows back up to its jar) */}
-                      {!calm && (lite ? (
-                        <m.span key={`dot${poured!.k}`} aria-hidden="true" className="pointer-events-none absolute -top-2 left-1/2 size-2 rounded-full" style={{ background: JAR_COLOR[pc.kind] }} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: [0, 1, 0] }} transition={{ duration: 0.9 }} />
-                      ) : (
-                        <m.span key={`pour${poured!.k}`} aria-hidden="true" className="pointer-events-none absolute -top-9 left-1/2 h-12 -translate-x-1/2 rounded-full" style={{ width, background: JAR_COLOR[pc.kind], transformOrigin: pc.kind === "discount" ? "50% 0%" : "50% 100%" }} initial={{ scaleY: 0, opacity: 0.9 }} animate={{ scaleY: [0, 1, 1, 0], opacity: [0.9, 0.9, 0.9, 0] }} transition={{ duration: 1.1, times: [0, 0.35, 0.7, 1], ease: "easeOut" }} />
-                      ))}
-                      <m.span key={`lbl${poured!.k}`} className="mono absolute -top-3 right-1 z-10 rounded bg-[#1B1A17] px-1.5 py-0.5 text-[11px] text-[#F6EED9] shadow" initial={{ y: -6, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: calm ? 0 : 0.35, duration: 0.2 }}>
-                        <Money p={got} sign /> {pc.label.slice(0, 10)}
-                      </m.span>
-                    </>
+                  {pc && got !== 0 && !calm && (
+                    // the pour: a stream as wide as this thali's share drops into its bowl (a discount flows back up to the jar)
+                    lite ? (
+                      <m.span key={`dot${poured!.k}`} aria-hidden="true" className="pointer-events-none absolute -top-2 right-[15px] size-2 rounded-full" style={{ background: JAR_COLOR[pc.kind] }} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: [0, 1, 0] }} transition={{ duration: 0.9 }} />
+                    ) : (
+                      <m.span key={`pour${poured!.k}`} aria-hidden="true" className="pointer-events-none absolute -top-4 right-[19px] h-9 translate-x-1/2 rounded-full" style={{ width, background: JAR_COLOR[pc.kind], transformOrigin: pc.kind === "discount" ? "50% 100%" : "50% 0%" }} initial={{ scaleY: 0, opacity: 0.9 }} animate={{ scaleY: [0, 1, 1, 0], opacity: [0.9, 0.9, 0.9, 0] }} transition={{ duration: 1.1, times: [0, 0.35, 0.7, 1], ease: "easeOut" }} />
+                    )
                   )}
-                  <div className="flex items-center gap-1"><Pattern seat={mm.seat} /><span className="hand text-base font-bold" style={{ color: ink(mm.seat).text }}>{mm.name}</span></div>
-                  <div className="mono mt-1 flex justify-between"><span>Items</span><Money p={p?.items ?? 0} /></div>
+                  <div className="flex items-center gap-1">
+                    <Pattern seat={mm.seat} />
+                    <span className="hand min-w-0 flex-1 truncate text-base font-bold" style={{ color: ink(mm.seat).text }}>{mm.name}</span>
+                    {/* the little bowl each pour lands in */}
+                    <Katori size={22} fill={pc && got !== 0 ? JAR_COLOR[pc.kind] : "#c6cfd2"} />
+                  </div>
+                  <AnimatePresence>
+                    {pc && got !== 0 && (
+                      <m.p key={`lbl${poured!.k}`} role="status" className="mono mt-1 inline-block rounded bg-[#1B1A17] px-1.5 py-0.5 text-[11px] text-[#F6EED9]" initial={{ y: -6, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ opacity: 0 }} transition={{ delay: calm ? 0 : 0.35, duration: 0.2 }}>
+                        <Money p={got} sign /> {pc.label.slice(0, 10)}
+                      </m.p>
+                    )}
+                  </AnimatePresence>
+                  <div className="mono mt-1 flex justify-between gap-1"><span>Items</span><Money p={p?.items ?? 0} className="shrink-0" /></div>
                   {Object.entries(p?.charges ?? {}).map(([cid, a]) => (
-                    <div key={cid} className="mono flex justify-between opacity-80"><span>{d.charges.find((c) => c.id === cid)?.label ?? "Round off"}</span><Money p={a} sign /></div>
+                    <div key={cid} className={`mono flex justify-between gap-1 rounded-sm transition-colors duration-300 ${pc?.id === cid ? "bg-[#F4B40055]" : "opacity-80"}`}>
+                      <span className="min-w-0 truncate">{d.charges.find((c) => c.id === cid)?.label ?? "Round off"}</span>
+                      <Money p={a} sign className="shrink-0" />
+                    </div>
                   ))}
                   {coins.length > 0 && (
                     <details className="hand mt-1 text-[var(--chai)]">

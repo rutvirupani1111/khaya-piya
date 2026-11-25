@@ -506,6 +506,7 @@ function Galla({ room }: { room: RoomApi }) {
                     {p.state === "unpaid" && <button type="button" className="tap press rounded border px-2" onClick={() => settleWith("mark_cash", mm.id, mm.name)}>{t("host.cash")}</button>}
                     {p.state === "unpaid" && <a className="tap press grid place-items-center rounded border px-2" target="_blank" rel="noopener" href={`https://wa.me/?text=${encodeURIComponent(`${mm.name}, ${v.restaurant || "bill"} ka tera hissa ₹${amountParam(total)} hai. Yahan dekh aur bhej: ${link}`)}`}>{t("host.nudge")}</a>}
                     {(p.state === "received" || p.state === "cash") && <Stamp text="MILA" color="#5CC98A" rotate={4} />}
+                    {mm.joined && p.state === "unpaid" && <button type="button" className="tap press rounded border border-dashed px-2 opacity-80" onClick={() => confirm(`${mm.name} ki seat khali karein? Wo dobara link khol ke apni seat le sakta hai.`) && room.send({ type: "reset_seat_device", memberId: mm.id })}>Seat khali karo</button>}
                   </div>
                 )}
               </li>
