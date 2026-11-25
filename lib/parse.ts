@@ -130,9 +130,33 @@ export function parseBill(text: string): { lines: ParsedLine[]; subtotal: number
     }
     name = name.replace(/^\d+[.)]\s*/, "").replace(/\s{2,}/g, " ").trim().slice(0, 60);
     if (!name) continue;
-    lines.push({ type: "item", name, qty: Math.max(1, Math.min(99, qty)), rate, amount, kind: classify(name), src: i, raw: l });
+    // a printed "qty x rate" must multiply to the amount. One stray or dropped digit in the amount is a far
+    // likelier misread than a wrong rate, so the product wins; either way the line is flagged for a look.
+    let amt = amount;
+    let conf: number | undefined;
+    if (rate != null && qty * rate !== amount) {
+      const want = qty * rate;
+      conf = 45;
+      if (digitDistance(String(want), String(Math.abs(amount))) <= 1) amt = want;
+    }
+    lines.push({ type: "item", name, qty: Math.max(1, Math.min(99, qty)), rate, amount: amt, kind: classify(name), conf, src: i, raw: l });
   }
   return { lines, subtotal, total, restaurant };
+}
+
+/** Edit distance between two digit strings (insert, delete, change one digit). */
+function digitDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
 }
 
 /** Quick Type: "[qty] name [rate|amount] [each]" per comma or new line. */

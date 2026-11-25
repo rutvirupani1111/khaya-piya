@@ -178,9 +178,9 @@ export function Odometer({ p, className }: { p: number; className?: string }) {
   return (
     <span className={className}>
       <span className="sr-only">₹{v}</span>
-      <span aria-hidden="true" className="inline-flex items-baseline">
+      <span aria-hidden="true" className="inline-flex items-end">
         {p < 0 && "−"}
-        <span className="rupee">₹</span>
+        <span className="rupee odo-col">₹</span>
         <span className="mono inline-flex">
           {[...v].map((ch, i) =>
             /\d/.test(ch) ? (
@@ -190,7 +190,7 @@ export function Odometer({ p, className }: { p: number; className?: string }) {
                 </span>
               </span>
             ) : (
-              <span key={`${v.length - i}`}>{ch}</span>
+              <span key={`${v.length - i}`} className="odo-col">{ch}</span>
             ),
           )}
         </span>

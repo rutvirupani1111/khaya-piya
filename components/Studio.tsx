@@ -86,6 +86,8 @@ function parsedParts(text: string, stable?: Stable) {
   const itemLines = p.lines.filter((l) => l.type === "item");
   const items: Item[] = itemLines.map((l, k) => ({ id: stableId(stable?.items, k), name: l.name, qty: l.qty, amount: l.amount, kind: l.kind ?? "food" }));
   const src = new Map(itemLines.map((l, k) => [items[k].id, l.src ?? -1]));
+  /** lines whose qty x rate did not match the printed amount */
+  const shaky = new Set(itemLines.flatMap((l, k) => (l.conf != null && l.conf < 70 ? [items[k].id] : [])));
   const drinkIds = items.filter((i) => i.kind === "drink").map((i) => i.id);
   const foodIds = items.filter((i) => i.kind !== "drink").map((i) => i.id);
   const hasVat = p.lines.some((l) => l.chargeKind === "vat");
@@ -106,7 +108,7 @@ function parsedParts(text: string, stable?: Stable) {
         removed: false,
       };
     });
-  return { p, items, charges, src };
+  return { p, items, charges, src, shaky };
 }
 
 /** Put a scan's lines on the draft: earlier copies of the same scan are replaced, everything else is kept. */
@@ -349,7 +351,7 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
       const parts = parsedParts(photo.lines.map((l) => l.text).join("\n"), stable);
       for (const it of parts.items) {
         const l = photo.lines[parts.src.get(it.id) ?? -1];
-        if (l) meta.current.set(it.id, { crop: cropLine(photo.canvas, l.box), low: l.numConf < 70 });
+        if (l) meta.current.set(it.id, { crop: cropLine(photo.canvas, l.box), low: l.numConf < 70 || parts.shaky.has(it.id) });
       }
       replace((x) => mergeParsed(x, parts, stable));
       if (!rescan) setPhotos((n) => n + 1);
@@ -510,7 +512,7 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
         </div>
       </header>
 
-      <section className="teak relative mt-4 rounded-xl px-4 pb-5 pt-6 shadow-lg">
+      <section className={`teak relative mt-4 rounded-xl px-4 pt-6 shadow-lg transition-[padding] ${scrap ? "pb-16" : "pb-5"}`}>
         <div className="relative mx-auto w-full max-w-[300px]">
           {/* the photo's thumbnail slides into the printer's paper slot */}
           <AnimatePresence>
@@ -560,9 +562,9 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
                     className={dupId === it.id ? "dup-pulse rounded" : undefined}
                   >
                     <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => setEditing(it.id)} className="tap mono flex min-w-0 flex-1 items-center gap-1.5 text-left text-[13px]">
-                        <span className="min-w-0 truncate">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
-                        <span aria-hidden="true" className="min-w-3 flex-1 translate-y-1 border-b-2 border-dotted border-[#1B1A1740]" />
+                      <button type="button" onClick={() => setEditing(it.id)} className="tap mono flex min-w-0 flex-1 items-end gap-1.5 py-1 text-left text-[13px] leading-snug">
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
+                        <span aria-hidden="true" className="mb-1 min-w-3 flex-1 border-b-2 border-dotted border-[#1B1A1740]" />
                         <span className={`shrink-0 ${meta.current.get(it.id)?.low ? "underline decoration-[var(--haldi)] decoration-2 underline-offset-4" : ""}`}><Money p={it.amount} /></span>
                       </button>
                       {meta.current.get(it.id)?.low && (
@@ -1016,7 +1018,7 @@ export function Table({ localId }: { localId: string }) {
       <AnimatePresence>
         {nag && (
           <m.div role="alert" initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-x-4 bottom-36 z-40 mx-auto max-w-xl rounded-lg bg-[var(--haldi)] p-3 text-[#1B1A17] shadow-xl">
-            <p className="font-semibold">{bill.unclaimed.length} {t("table.unclaimed")}</p>
+            <p className="font-semibold">{bill.unclaimed.length} {t(bill.unclaimed.length === 1 ? "table.unclaimedOne" : "table.unclaimed")}</p>
             <div className="mt-2 flex gap-2">
               <button type="button" className="tap press rounded-md bg-[#1B1A17] px-3 font-semibold text-[#F6EED9]" onClick={() => { update((x) => ({ ...x, claims: [...x.claims, ...bill.unclaimed.map((iid) => ({ itemId: iid, memberId: x.members[0].id, weight: 1 }))] })); setNag(false); }}>{t("table.mine")}</button>
               <button type="button" className="tap press rounded-md border border-[#1B1A17] px-3" onClick={() => { const first = bill.unclaimed[0]; setSel(first); setNag(false); katoris.current.get(first)?.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "center" }); }}>OK</button>
@@ -1252,7 +1254,7 @@ export function Shelf({ localId }: { localId: string }) {
 
   const openRoom = async () => {
     setErr("");
-    if (bill.unclaimed.length) return setErr(`${bill.unclaimed.length} ${t("table.unclaimed")}`);
+    if (bill.unclaimed.length) return setErr(`${bill.unclaimed.length} ${t(bill.unclaimed.length === 1 ? "table.unclaimedOne" : "table.unclaimed")}`);
     if (!payee.trim()) return setErr("Apna naam likho, dost ke UPI app mein yahi dikhega.");
     if (!d.demo && !/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(vpa)) return setErr("UPI ID sahi nahi lag raha. Jaise: naam@okicici");
     setBusy(true);
@@ -1278,7 +1280,7 @@ export function Shelf({ localId }: { localId: string }) {
         <section className="relative mt-3">
           <div className="flex gap-1 overflow-x-auto pb-2 pt-4">
             {d.charges.map((c) => (
-              <button key={c.id} type="button" onClick={() => { setOpen(open === c.id ? null : c.id); const k = Date.now(); setPoured({ id: c.id, k }); setTimeout(() => setPoured((p) => (p?.k === k ? null : p)), 2000); if (c.kind === "service") setNoteShown(true); }} aria-expanded={open === c.id} className="tap shrink-0">
+              <button key={c.id} type="button" onClick={() => { setOpen(open === c.id ? null : c.id); const k = Date.now(); setPoured({ id: c.id, k }); setTimeout(() => setPoured((p) => (p?.k === k ? null : p)), 2000); if (c.kind === "service") setNoteShown(true); }} aria-expanded={open === c.id} aria-label={`${c.label}: ₹${((bill.chargeAmounts[c.id] ?? 0) / 100).toFixed(2)}${c.removed ? " (hata diya)" : c.included ? " (daam mein shamil)" : ""}`} className="tap shrink-0">
                 <Jar label={c.label.slice(0, 10)} amount={`₹${((bill.chargeAmounts[c.id] ?? 0) / 100).toFixed(2)}`} color={JAR_COLOR[c.kind]} tipped={poured?.id === c.id && !c.removed && !c.included} closed={c.removed} outline={c.included} flipped={c.kind === "discount"} />
               </button>
             ))}

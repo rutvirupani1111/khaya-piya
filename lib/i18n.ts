@@ -20,6 +20,7 @@ const M = {
   "table.friendName": ["Dost ka naam", "Friend's name", "दोस्त का नाम"],
   "table.everyone": ["Sab ne khaya", "Everyone had it", "सबने खाया"],
   "table.unclaimed": ["cheezein kisi ki nahi", "items belong to nobody", "चीज़ें किसी की नहीं"],
+  "table.unclaimedOne": ["cheez kisi ki nahi", "item belongs to nobody", "चीज़ किसी की नहीं"],
   "table.mine": ["Mere khate mein daalo", "Put them on me", "मेरे खाते में डालो"],
   "table.masala": ["Masala lagao", "Add the charges", "मसाला लगाओ"],
   "table.pick": ["Katori ko thali pe kheencho, ya katori chuno phir thali pe tap karo", "Drag a bowl onto a plate, or pick a bowl then tap plates", "कटोरी को थाली पे खींचो, या कटोरी चुनो फिर थाली पे टैप करो"],

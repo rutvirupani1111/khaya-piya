@@ -208,7 +208,7 @@ function Folder({ room }: { room: RoomApi }) {
                 style={{ transformStyle: "preserve-3d", backfaceVisibility: "hidden" }}
               >
                 <p className="display foil text-3xl">{v.restaurant || "KhayaPiya"}</p>
-                <p className="mt-3">{host?.name ?? "Host"} ne bill bhara</p>
+                <p className="mt-3">{v.payeeName?.trim() || host?.name || "Host"} ne bill bhara</p>
                 <p className="display mt-2 text-4xl text-[var(--haldi)]"><Money p={v.bill.computedTotal} /></p>
                 <button ref={btnRef} type="button" onClick={open} className="tap press mt-6 min-h-12 rounded-full bg-[var(--haldi)] px-7 text-lg font-semibold text-[#1B1A17]">{t("folder.open")}</button>
                 <p className="mt-2 text-xs opacity-70">Swipe up ya scroll karo</p>
@@ -355,7 +355,8 @@ function ClaimList({ room, canClaim, onEdit }: { room: RoomApi; canClaim: boolea
                 <div className="mt-1 flex items-center gap-2 text-xs">
                   <span className="font-semibold">{t("claim.howMany")}</span>
                   <button type="button" aria-label="Ek kam" disabled={mineC.weight <= 1} className="tap press rounded border px-2 disabled:opacity-30" onClick={() => room.send({ type: "set_weight", itemId: it.id, memberId: me, weight: mineC.weight - 1 })}>−</button>
-                  <span className="mono w-10 text-center text-sm">{mineC.weight}/{it.qty}</span>
+                  <span className="mono w-8 text-center text-sm">{mineC.weight}</span>
+                  <span className="opacity-70">bill pe {it.qty}</span>
                   <button type="button" aria-label="Ek zyada" disabled={mineC.weight >= Math.min(12, it.qty)} className="tap press rounded border px-2 disabled:opacity-30" onClick={() => room.send({ type: "set_weight", itemId: it.id, memberId: me, weight: mineC.weight + 1 })}>+</button>
                 </div>
               )}
@@ -436,7 +437,7 @@ function Coupon({ room, memberId }: { room: RoomApi; memberId: string }) {
         {pay.state === "sent" && <p className="mt-2 text-sm font-semibold">{t("pay.waiting")}</p>}
         {pay.state === "unpaid" && pay.rejectedAt && (
           <m.p role="alert" initial={{ x: -6 }} animate={{ x: [-6, 6, -3, 0] }} transition={{ duration: 0.4 }} className="mt-2 rounded-sm bg-[#A61E1E] px-2 py-1 text-sm font-semibold text-[#F6EED9]">
-            {v.members.find((x) => x.id === v.hostMemberId)?.name ?? "Host"} {t("pay.rejectedBy")}
+            {v.payeeName?.trim() || v.members.find((x) => x.id === v.hostMemberId)?.name || "Host"} {t("pay.rejectedBy")}
           </m.p>
         )}
       </div>
@@ -658,7 +659,7 @@ function Galla({ room }: { room: RoomApi }) {
         {v.status !== "final" && v.status !== "closed" && <button type="button" disabled={v.bill.unclaimed.length > 0 || v.bill.diff !== 0} className="tap press rounded-md bg-[var(--chutney-deep)] px-3 text-white disabled:opacity-40" onClick={() => room.send({ type: "finalize" })}>{t("host.finalize")}</button>}
         {v.status === "final" && <button type="button" className="tap press rounded-md border border-current px-3" onClick={() => room.send({ type: "reopen" })}>Re-open</button>}
         {v.status !== "closed" && <button type="button" className="tap press rounded-md border border-[var(--stamp-red)] px-3 text-[var(--stamp-red)]" onClick={() => confirm("Room band? Naam aur UPI ID mit jayenge.") && room.send({ type: "close" })}>{t("host.close")}</button>}
-        <span className="self-center opacity-70">Status: {v.status}</span>
+        <span className="hand self-center text-lg opacity-80">Room {({ open: "khula hai", locked: "lock hai", final: "pakka ho gaya", closed: "band hai" } as Record<string, string>)[v.status] ?? v.status}</span>
       </section>
       <div className="mt-4 flex justify-center opacity-80"><Jar label="Galla" amount={`₹${amountParam(got)}`} color="#B87333" /></div>
       <div className="mt-2 flex justify-center"><Thali seat={1} name={v.members[0]?.name ?? "M"} size={56} /></div>
