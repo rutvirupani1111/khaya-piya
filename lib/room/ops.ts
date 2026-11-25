@@ -146,6 +146,8 @@ export function applyOp(prev: RoomState, op: Op, actor: Actor, now = new Date().
       const id = str(op.itemId);
       s.items = s.items.filter((i) => i.id !== id);
       s.claims = s.claims.filter((c) => c.itemId !== id);
+      // a charge limited to that line forgets it, so the charge can still be edited afterwards
+      for (const c of s.charges) if (c.scope) c.scope = c.scope.filter((x) => x !== id);
       return { ok: true, state: s };
     }
     case "set_charge": {

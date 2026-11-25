@@ -3,7 +3,7 @@ import { AnimatePresence, m } from "motion/react";
 import qrcode from "qrcode-generator";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { kvGet, kvSet } from "@/lib/draft";
-import { amountParam } from "@/lib/money";
+import { amountParam, type Charge } from "@/lib/money";
 import { applyOp, billOf, type Actor, type Op, type Snapshot } from "@/lib/room/ops";
 import { Coin, Jar, Mishri, Money, Pattern, Seeds, Stamp, Thali, ink } from "./art";
 import { usePrefs } from "./Prefs";
@@ -133,18 +133,20 @@ function useRoom(initial: Snap, preview = false) {
 export function Room({ initial, preview = false }: { initial: Snap; preview?: boolean }) {
   const room = useRoom(initial, preview);
   const v = room.view;
+  // this phone handed its galla to another phone: it stays on the bill as a viewer, folder already open
+  const wasHost = useRef(initial.me.isHost && !preview);
   if (v.me.isHost && !preview) return <Galla room={room} />;
-  return <Folder room={room} />;
+  return <Folder room={room} handedOver={wasHost.current} />;
 }
 
 type RoomApi = ReturnType<typeof useRoom>;
 
 /* --------------------------- BILL FOLDER (guest) --------------------------- */
-function Folder({ room }: { room: RoomApi }) {
+function Folder({ room, handedOver = false }: { room: RoomApi; handedOver?: boolean }) {
   const { t, calm, lite, sampleFrames } = usePrefs();
   const v = room.view;
   const joined = !!v.me.memberId;
-  const [state, setState] = useState<"closed" | "opening" | "open">(joined ? "open" : "closed");
+  const [state, setState] = useState<"closed" | "opening" | "open">(joined || handedOver ? "open" : "closed");
   const openedRef = useRef(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -228,12 +230,12 @@ function Folder({ room }: { room: RoomApi }) {
           </m.div>
         )}
       </AnimatePresence>
-      <GuestPage room={room} nameRef={nameRef} />
+      <GuestPage room={room} nameRef={nameRef} handedOver={handedOver} />
     </>
   );
 }
 
-function GuestPage({ room, nameRef }: { room: RoomApi; nameRef: React.RefObject<HTMLInputElement | null> }) {
+function GuestPage({ room, nameRef, handedOver }: { room: RoomApi; nameRef: React.RefObject<HTMLInputElement | null>; handedOver: boolean }) {
   const { t } = usePrefs();
   const v = room.view;
   const me = v.me.memberId;
@@ -252,6 +254,14 @@ function GuestPage({ room, nameRef }: { room: RoomApi; nameRef: React.RefObject<
     room.setServer(j);
   };
   const placeholders = v.members.filter((mm) => !mm.joined && mm.id !== v.hostMemberId);
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("handover")) {
+      setStale(true);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
   const mine = me ? v.bill.perMember[me] : null;
   const locked = v.status !== "open";
 
@@ -262,12 +272,22 @@ function GuestPage({ room, nameRef }: { room: RoomApi; nameRef: React.RefObject<
         {mine && <span className="text-sm">{t("share.mine")} <Money p={mine.total} className="display text-lg text-[var(--haldi)]" /></span>}
       </m.header>
 
+      {handedOver && (
+        <p role="status" className="hand mt-3 -rotate-1 rounded-sm bg-[#1B1A17] px-3 py-2 text-lg leading-snug text-[#F6EED9] shadow">
+          Galla ab doosre phone pe hai. Yahan se bill dekh sakte ho; Mila wahan se hoga.
+        </p>
+      )}
+      {stale && (
+        <p role="alert" className="hand mt-3 rotate-1 rounded-sm bg-[#A61E1E] px-3 py-2 text-lg leading-snug text-[#F6EED9] shadow">
+          Galla ka link purana ho gaya ya pehle hi khul chuka. Galla wale phone se naya link maango.
+        </p>
+      )}
       {room.preview && (
         <p role="note" className="hand mt-3 -rotate-1 rounded-sm bg-[var(--haldi)] px-3 py-2 text-lg leading-snug text-[#1B1A17] shadow">
           Ye dost ke phone ka view hai. Yahan se koi naam nahi judega, sirf dekhne ke liye.
         </p>
       )}
-      {!me && (
+      {!me && !handedOver && (
         <section className="kot mt-4 rounded-md p-4">
           <label htmlFor="nm" className="display text-2xl">{t("folder.name")}</label>
           <input id="nm" ref={nameRef} value={name} maxLength={24} onChange={(e) => setName(e.target.value)} className="tap hand mt-2 w-full rounded border border-[#1B1A17] bg-transparent px-2 text-xl" />
@@ -503,6 +523,7 @@ function Galla({ room }: { room: RoomApi }) {
   const v = room.view;
   const [undo, setUndo] = useState<{ memberId: string; label: string; key: number } | null>(null);
   const [editing, setEditing] = useState<string | null | undefined>(undefined);
+  const [charge, setCharge] = useState<string | null>(null);
   const [seatName, setSeatName] = useState("");
   const [sound, setSound] = useState(false);
   const [ring, setRing] = useState(0);
@@ -653,6 +674,22 @@ function Galla({ room }: { room: RoomApi }) {
       <p className="hand mt-4 text-base opacity-80">{v.status === "open" || v.status === "locked" ? "Kisi line pe tap karo: naam, daam ya kisne khaya, sab badal sakte ho." : ""}</p>
       <ClaimList room={room} canClaim={false} onEdit={(id) => setEditing(id)} />
       <AnimatePresence>{editing !== undefined && <HostItemSheet key={editing ?? "new"} room={room} itemId={editing} onClose={() => setEditing(undefined)} />}</AnimatePresence>
+      {v.charges.length > 0 && (
+        <section aria-label="Masala" className="mt-3">
+          <h2 className="display text-xl">Masala</h2>
+          <ul className="mt-1 flex flex-wrap gap-2">
+            {v.charges.map((c) => (
+              <li key={c.id}>
+                <button type="button" disabled={!(v.status === "open" || v.status === "locked")} onClick={() => setCharge(c.id)} className={`tap press kot flex items-center gap-2 rounded-full border-2 px-3 text-sm ${c.removed ? "border-dashed border-[#1B1A1760] line-through opacity-60" : c.included ? "border-dashed border-[#1B1A17]" : "border-[#1B1A17]"}`}>
+                  <span className="font-semibold">{c.label || c.kind.toUpperCase()}</span>
+                  <Money p={v.bill.chargeAmounts[c.id] ?? 0} sign={c.kind !== "discount"} className="mono" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <AnimatePresence>{charge && <HostChargeSheet key={charge} room={room} chargeId={charge} onClose={() => setCharge(null)} />}</AnimatePresence>
       <section className="mt-4 flex flex-wrap gap-2 text-sm font-semibold">
         {v.status === "open" && <button type="button" className="tap press rounded-md border border-current px-3" onClick={() => room.send({ type: "lock" })}>{t("host.lock")}</button>}
         {v.status === "locked" && <button type="button" className="tap press rounded-md border border-current px-3" onClick={() => room.send({ type: "unlock" })}>Unlock</button>}
@@ -661,6 +698,7 @@ function Galla({ room }: { room: RoomApi }) {
         {v.status !== "closed" && <button type="button" className="tap press rounded-md border border-[var(--stamp-red)] px-3 text-[var(--stamp-red)]" onClick={() => confirm("Room band? Naam aur UPI ID mit jayenge.") && room.send({ type: "close" })}>{t("host.close")}</button>}
         <span className="hand self-center text-lg opacity-80">Room {({ open: "khula hai", locked: "lock hai", final: "pakka ho gaya", closed: "band hai" } as Record<string, string>)[v.status] ?? v.status}</span>
       </section>
+      {v.status !== "closed" && <Handover code={v.code} />}
       <div className="mt-4 flex justify-center opacity-80"><Jar label="Galla" amount={`₹${amountParam(got)}`} color="#B87333" /></div>
       <div className="mt-2 flex justify-center"><Thali seat={1} name={v.members[0]?.name ?? "M"} size={56} /></div>
       <AnimatePresence>
@@ -733,5 +771,121 @@ function HostItemSheet({ room, itemId, onClose }: { room: RoomApi; itemId: strin
         </div>
       </m.div>
     </m.div>
+  );
+}
+
+/** The host changes a charge in the live room: its amount, how it splits, included in prices, or takes it off. */
+function HostChargeSheet({ room, chargeId, onClose }: { room: RoomApi; chargeId: string; onClose: () => void }) {
+  const v = room.view;
+  const c = v.charges.find((x) => x.id === chargeId);
+  const [val, setVal] = useState(c ? (Math.abs(c.value) / 100).toFixed(2) : "");
+  const [err, setErr] = useState("");
+  if (!c) return null;
+  const send = (patch: Partial<Charge>) => room.send({ type: "set_charge", charge: { ...c, ...patch } });
+  const save = () => {
+    const m = val.replace(/,/g, "").trim().match(/^(\d+)(?:\.(\d{1,2}))?$/);
+    if (!m) return setErr(c.mode === "percent" ? "Percent sahi likho, jaise 5 ya 2.5" : "Rakam sahi likho, jaise 40 ya 40.50");
+    const n = Number(m[1]) * 100 + Number((m[2] || "0").padEnd(2, "0"));
+    send({ value: c.kind === "roundoff" && c.value < 0 ? -n : n });
+    onClose();
+  };
+  return (
+    <m.div className="fixed inset-0 z-50 flex items-end bg-[#0008]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      <m.div role="dialog" aria-modal="true" aria-label={`${c.label} badlo`} className="kot mx-auto w-full max-w-xl rounded-t-2xl px-4 pb-6 pt-4" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+        <div className="flex items-center gap-3">
+          <Jar label={c.label.slice(0, 10)} amount={`₹${amountParam(v.bill.chargeAmounts[c.id] ?? 0)}`} color={c.kind === "discount" ? "#D62828" : c.kind === "service" ? "#2E9E5B" : c.kind === "vat" ? "#E8578B" : "#F4B400"} closed={c.removed} outline={c.included} flipped={c.kind === "discount"} />
+          <div className="min-w-0">
+            <h2 className="display text-3xl leading-tight">{c.label || c.kind.toUpperCase()}</h2>
+            <p className="text-sm opacity-80">{c.scope ? `${c.scope.length} cheezon pe` : "Poore bill pe"} · {c.split === "equal" ? "barabar" : "hisaab se"}</p>
+          </div>
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm font-semibold">
+          {c.mode === "percent" ? "Percent" : "Rakam (₹)"}
+          <input value={val} inputMode="decimal" onChange={(e) => setVal(e.target.value)} className="tap mono w-28 border-b-2 border-[#1B1A17] bg-transparent text-lg outline-none" />
+          {c.mode === "percent" && <span>%</span>}
+        </label>
+        <div className="mt-3 flex flex-wrap gap-2 text-sm font-semibold">
+          {c.kind === "service" && <button type="button" aria-pressed={c.removed} onClick={() => send({ removed: !c.removed })} className="tap press rounded-md border border-[#1B1A17] px-3">{c.removed ? "Service wapas lagao" : "Service charge hata do"}</button>}
+          {c.kind !== "discount" && <button type="button" aria-pressed={c.included} onClick={() => send({ included: !c.included })} className="tap press rounded-md border border-[#1B1A17] px-3">Daam mein shamil {c.included ? "✓" : ""}</button>}
+          <button type="button" onClick={() => send({ split: c.split === "equal" ? "proportional" : "equal" })} className="tap press rounded-md border border-[#1B1A17] px-3">{c.split === "equal" ? "Barabar baanto" : "Hisaab se"}</button>
+        </div>
+        {err && <p role="alert" className="mt-2 font-semibold text-[var(--stamp-red-deep)]">{err}</p>}
+        <div className="mt-4 flex gap-2">
+          <button type="button" onClick={() => { if (confirm(`${c.label} bill se hatayein?`)) { room.send({ type: "remove_charge", chargeId: c.id }); onClose(); } }} className="tap press rounded-md border-2 border-[var(--stamp-red-deep)] px-3 font-semibold text-[var(--stamp-red-deep)]">Hatao</button>
+          <button type="button" onClick={save} className="tap press flex-1 rounded-md bg-[var(--chutney-deep)] text-lg font-semibold text-white">Ho gaya</button>
+        </div>
+      </m.div>
+    </m.div>
+  );
+}
+
+/**
+ * "Galla doosre phone pe do": a one-time link and QR, good for 10 minutes. Whoever opens it gets the host
+ * controls and this phone becomes a viewer. The UPI ID and the shares do not change.
+ */
+function Handover({ code }: { code: string }) {
+  const [open, setOpen] = useState(false);
+  const [link, setLink] = useState<{ url: string; expires: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!link) return;
+    const timer = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, [link]);
+  const make = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await fetch(`/api/r/${code}/handover`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const j = (await r.json()) as { path?: string; expires?: string; error?: string };
+      if (!r.ok || !j.path) throw new Error(j.error || "Link nahi bana. Thodi der mein phir try karo.");
+      setLink({ url: `${window.location.origin}${j.path}`, expires: Date.parse(j.expires ?? "") || Date.now() + 600000 });
+      setNow(Date.now());
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+    setBusy(false);
+  };
+  const left = link ? Math.max(0, Math.ceil((link.expires - now) / 60000)) : 0;
+  const qr = link
+    ? (() => {
+        const q = qrcode(0, "M");
+        q.addData(link.url);
+        q.make();
+        return q.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
+      })()
+    : "";
+  return (
+    <section className="mt-5">
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="tap press hand flex w-full items-center gap-2 text-left text-lg">
+        <svg width="26" height="22" viewBox="0 0 26 22" aria-hidden="true"><rect x="1" y="5" width="11" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="14" y="2" width="11" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M8 3q5-3 9 0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+        <span className="flex-1 underline decoration-dotted underline-offset-4">Galla doosre phone pe do</span>
+        <span aria-hidden="true">{open ? "−" : "+"}</span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <m.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+            <div className="kot mt-2 rounded-md p-3 text-sm">
+              <p>Phone ki battery ja rahi hai? Ye link jis phone pe khulega, Mila aur Nahi aaya wahan se hoga. Is phone se galla chala jayega. UPI ID aur sabke hisse wahi rahenge.</p>
+              {!link || left === 0 ? (
+                <button type="button" disabled={busy} onClick={make} className="tap press mt-2 w-full rounded-md bg-[#1B1A17] font-semibold text-[#F6EED9] disabled:opacity-50">{busy ? "..." : link ? "Naya link banao" : "Link banao (10 minute)"}</button>
+              ) : (
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="w-28 shrink-0 rounded bg-white p-1" dangerouslySetInnerHTML={{ __html: qr }} />
+                  <div className="min-w-0">
+                    <p className="hand text-lg leading-tight">{left} minute tak chalega, ek hi baar</p>
+                    <button type="button" onClick={async () => { await navigator.clipboard.writeText(link.url).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1500); }} className="tap press mt-1 rounded-md border border-[#1B1A17] px-3 font-semibold">{copied ? "Copy ho gaya" : "Link copy karo"}</button>
+                  </div>
+                </div>
+              )}
+              {err && <p role="alert" className="mt-2 font-semibold text-[var(--stamp-red-deep)]">{err}</p>}
+            </div>
+          </m.div>
+        )}
+      </AnimatePresence>
+    </section>
   );
 }
