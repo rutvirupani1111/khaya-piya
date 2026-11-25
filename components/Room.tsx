@@ -141,7 +141,7 @@ type RoomApi = ReturnType<typeof useRoom>;
 
 /* --------------------------- BILL FOLDER (guest) --------------------------- */
 function Folder({ room }: { room: RoomApi }) {
-  const { t, calm } = usePrefs();
+  const { t, calm, lite, sampleFrames } = usePrefs();
   const v = room.view;
   const joined = !!v.me.memberId;
   const [state, setState] = useState<"closed" | "opening" | "open">(joined ? "open" : "closed");
@@ -154,9 +154,10 @@ function Folder({ room }: { room: RoomApi }) {
     if (openedRef.current) return;
     openedRef.current = true;
     setState("opening");
+    if (!calm) sampleFrames();
     if (!calm) setTimeout(() => { setBurst(true); setTimeout(() => setBurst(false), 900); }, 650);
     setTimeout(() => { setState("open"); setTimeout(() => nameRef.current?.focus(), 50); }, calm ? 250 : 1600);
-  }, [calm]);
+  }, [calm, sampleFrames]);
 
   useEffect(() => {
     if (state !== "closed") return;
@@ -197,7 +198,7 @@ function Folder({ room }: { room: RoomApi }) {
                   <p className="mono text-center text-sm uppercase">{v.restaurant || "Bill"}</p>
                   {v.items.slice(0, 8).map((it) => <p key={it.id} className="mono flex justify-between text-xs"><span className="truncate">{it.name}</span><Money p={it.amount} /></p>)}
                 </m.div>
-                <m.div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/40 to-transparent" animate={{ opacity: opening && !calm ? [0, 0.35, 0] : 0 }} transition={{ duration: 1.2, times: [0, 0.5, 1] }} />
+                <m.div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/40 to-transparent" animate={{ opacity: opening && !calm && !lite ? [0, 0.35, 0] : 0 }} transition={{ duration: 1.2, times: [0, 0.5, 1] }} />
               </div>
               {/* the leatherette cover */}
               <m.div
@@ -216,7 +217,7 @@ function Folder({ room }: { room: RoomApi }) {
               <div className="steel absolute -bottom-6 right-2 h-12 w-20 rounded-b-full" aria-hidden="true" />
               {burst && (
                 <div className="pointer-events-none absolute -bottom-2 right-10" aria-hidden="true">
-                  {Array.from({ length: 24 }).map((_, i) => (
+                  {Array.from({ length: lite ? 8 : 24 }).map((_, i) => (
                     <m.span key={i} className="absolute" initial={{ x: 0, y: 0, opacity: 1 }} animate={{ x: Math.cos(i * 0.9) * (60 + (i % 5) * 18), y: -80 - (i % 7) * 20, opacity: 0, rotate: i * 40 }} transition={{ duration: 0.9, ease: "easeOut" }}>
                       {i % 3 ? <Seeds /> : <Mishri />}
                     </m.span>

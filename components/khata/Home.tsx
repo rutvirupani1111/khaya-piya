@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
 import { Money } from "../art";
 import { usePrefs } from "../Prefs";
-import { Bookmark, Tiffin, tiffinInk } from "./art";
+import { Bookmark, StepIcon, Tiffin, tiffinInk } from "./art";
 
 const snap = { type: "spring", stiffness: 520, damping: 34 } as const;
 const soft = { type: "spring", stiffness: 380, damping: 38 } as const;
@@ -32,9 +32,13 @@ export function KhataHome({ user, groups: initial, history: firstHistory }: { us
         <Profile user={user} />
       </header>
       <h1 className="display mt-2 text-5xl">{t("khata.title")}</h1>
+      <p className="mt-1 text-base leading-snug opacity-85">{t("khata.sub")}</p>
+
+      <HowItWorks initiallyOpen={groups.length === 0} />
 
       {/* the shelf of tiffin carriers, one per recurring group */}
-      <section aria-label={t("khata.shelf")} className="relative mt-4">
+      <section aria-labelledby="kp-shelf" className="relative mt-6">
+        <h2 id="kp-shelf" className="display text-2xl">{t("khata.shelf")}</h2>
         <ul className="flex gap-3 overflow-x-auto px-1 pb-1 pt-2">
           <AnimatePresence initial={false}>
             {groups.map((g) => (
@@ -44,11 +48,14 @@ export function KhataHome({ user, groups: initial, history: firstHistory }: { us
                   {/* jute string and a paper tag */}
                   <span className="kot -mt-1 w-full -rotate-2 rounded-sm px-2 py-1 text-center shadow-md">
                     <span className="hand block truncate text-lg font-bold leading-tight">{g.name}</span>
-                    <span className="block text-[11px] opacity-70">{KIND_LABEL[g.kind]} · {g.people} log</span>
+                    <span className="block text-[11px] opacity-70">{KIND_LABEL[g.kind]} · {g.people} {t("khata.ppl")}</span>
                     {g.myNet != null && g.myNet !== 0 && (
-                      <Money p={g.myNet} sign className={`block text-sm font-semibold ${g.myNet > 0 ? "text-[var(--chutney-deep)]" : "text-[var(--stamp-red-deep)]"}`} />
+                      <span className={`block text-sm font-semibold leading-tight ${g.myNet > 0 ? "text-[#1D6B3E]" : "text-[#A61E1E]"}`}>
+                        <Money p={g.myNet} sign />
+                        <span className="block text-[11px] font-normal">{g.myNet > 0 ? t("khata.youGet") : t("khata.youOwe")}</span>
+                      </span>
                     )}
-                    {g.myNet === 0 && g.entries > 0 && <span className="block text-sm font-semibold text-[var(--formica-ink)]">{t("khata.even")}</span>}
+                    {g.myNet === 0 && g.entries > 0 && <span className="block text-sm font-semibold text-[#2C6B5E]">{t("khata.even")}</span>}
                   </span>
                 </Link>
               </m.li>
@@ -63,7 +70,12 @@ export function KhataHome({ user, groups: initial, history: firstHistory }: { us
         </ul>
         <div className="teak h-4 rounded shadow-md" />
         <div className="mx-3 h-2 rounded-b bg-[#5b3b22]" />
-        {groups.length === 0 && <p className="hand mt-3 text-lg leading-snug">{t("khata.emptyShelf")}</p>}
+        {groups.length === 0 && (
+          <div className="mt-3">
+            <p className="text-base leading-snug">{t("khata.emptyShelf")}</p>
+            <button type="button" onClick={() => setMaking(true)} className="tap press mt-3 w-full rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] shadow">{t("khata.firstGroup")}</button>
+          </div>
+        )}
       </section>
 
       <HistoryBook first={firstHistory} />
@@ -115,6 +127,7 @@ function Profile({ user }: { user: { name: string; vpa: string | null } }) {
             <label className="mt-2 block text-sm font-semibold">{t("room.vpa")}
               <input value={vpa} onChange={(e) => setVpa(e.target.value.trim())} placeholder="naam@okicici" className="tap mono mt-1 w-full border-b-2 border-[#1B1A17] bg-transparent text-sm outline-none" />
             </label>
+            <p className="mt-1 text-xs leading-snug opacity-75">UPI ID ho to dost seedha tujhe bhej payenge.</p>
             {msg && <p role="status" className="mt-1 text-sm">{msg}</p>}
             <div className="mt-3 flex gap-2">
               <button type="button" onClick={save} className="tap press flex-1 rounded-md bg-[var(--chutney-deep)] font-semibold text-white">{t("khata.save")}</button>
@@ -201,7 +214,7 @@ function NewTiffin({ n, onClose, onPending, onFailed }: { n: number; onClose: ()
   const firstRef = useRef<HTMLInputElement>(null);
   useEffect(() => firstRef.current?.focus(), []);
   const save = async () => {
-    if (!name.trim()) return setErr("Tiffin ka naam likho, jaise Flat 302.");
+    if (!name.trim()) return setErr(`${t("khata.groupName")}? ${t("khata.groupHint")}.`);
     const list = people.filter((p) => p.name.trim()).map((p) => ({ name: p.name.trim().slice(0, 24), vpa: p.vpa.trim() || null }));
     setBusy(true);
     setErr("");
@@ -223,7 +236,9 @@ function NewTiffin({ n, onClose, onPending, onFailed }: { n: number; onClose: ()
           <Tiffin n={n} size={56} tiers={kind === "trip" ? 2 : kind === "lunch" ? 4 : 3} />
           <div className="flex-1 pl-2">
             <h2 className="display text-3xl">{t("khata.newTiffin")}</h2>
-            <input ref={firstRef} value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Flat 302" aria-label="Tiffin ka naam" className="tap hand mt-1 h-9 w-full border-b-2 border-[#1B1A17] bg-transparent text-2xl outline-none" />
+            <label htmlFor="kp-gname" className="mt-1 block text-sm font-semibold">{t("khata.groupName")}</label>
+            <input id="kp-gname" ref={firstRef} value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Flat 302" className="tap hand h-9 w-full border-b-2 border-[#1B1A17] bg-transparent text-2xl outline-none" />
+            <p className="mt-1 text-xs opacity-70">{t("khata.groupHint")}</p>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-2 pl-[60px]">
@@ -231,7 +246,7 @@ function NewTiffin({ n, onClose, onPending, onFailed }: { n: number; onClose: ()
             <button key={k} type="button" aria-pressed={kind === k} onClick={() => setKind(k)} className={`tap press rounded-full border-2 px-3 text-sm font-semibold ${kind === k ? "border-[var(--stamp-red-deep)] bg-[var(--stamp-red-deep)] text-[#F6EED9]" : "border-[#1B1A17]"}`}>{KIND_LABEL[k]}</button>
           ))}
         </div>
-        <p className="ledger-row mt-3 pl-[60px] text-sm font-semibold">{t("khata.people")} (tu pehle se hai)</p>
+        <p className="ledger-row mt-3 pl-[60px] text-sm font-semibold">{t("khata.whoElse")}</p>
         <ul className="pl-[60px]">
           {people.map((p, i) => (
             <li key={i} className="flex gap-2">
@@ -246,9 +261,45 @@ function NewTiffin({ n, onClose, onPending, onFailed }: { n: number; onClose: ()
         {err && <p role="alert" className="mt-2 pl-[60px] text-sm font-semibold text-[var(--stamp-red-deep)]">{err}</p>}
         <div className="mt-4 flex gap-2 pl-[60px]">
           <button type="button" onClick={onClose} className="tap press rounded-md border border-[#1B1A17] px-4 font-semibold">{t("pay.no")}</button>
-          <button type="button" disabled={busy} onClick={save} className="tap press flex-1 rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] disabled:opacity-60">{busy ? "Rakh raha hai..." : "Shelf pe rakho"}</button>
+          <button type="button" disabled={busy} onClick={save} className="tap press flex-1 rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] disabled:opacity-60">{busy ? "..." : t("khata.create")}</button>
         </div>
       </m.div>
     </m.div>
+  );
+}
+
+/** Three plain steps for anyone opening the khata for the first time. Open when there is nothing on the shelf yet. */
+export function HowItWorks({ initiallyOpen = true }: { initiallyOpen?: boolean }) {
+  const { t } = usePrefs();
+  const [open, setOpen] = useState(initiallyOpen);
+  const steps = [
+    ["khata.step1", "tiffin"],
+    ["khata.step2", "pencil"],
+    ["khata.step3", "thread"],
+  ] as const;
+  return (
+    <section className="kot mt-4 rounded-sm px-3 pb-1 pt-1 shadow-md" style={{ transform: "rotate(-0.4deg)" }}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="tap flex w-full items-center justify-between gap-2 text-left">
+        <span className="display text-xl">{t("khata.how")}</span>
+        <m.svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" animate={{ rotate: open ? 180 : 0 }} transition={snap}>
+          <path d="M4 7l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </m.svg>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <m.ol key="steps" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22 }} className="overflow-hidden">
+            {steps.map(([k, icon], i) => (
+              <m.li key={k} initial={{ x: -10, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.05 + i * 0.07, duration: 0.2 }} className="flex items-start gap-3 border-t border-dashed border-[#1B1A1733] py-2">
+                <span className="relative grid size-11 shrink-0 place-items-center">
+                  <StepIcon kind={icon} />
+                  <span className="absolute -left-1 -top-1 grid size-5 place-items-center rounded-full bg-[#A61E1E] text-xs font-bold text-[#F6EED9]">{i + 1}</span>
+                </span>
+                <p className="pt-0.5 text-base leading-snug">{t(k)}</p>
+              </m.li>
+            ))}
+          </m.ol>
+        )}
+      </AnimatePresence>
+    </section>
   );
 }

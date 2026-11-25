@@ -76,3 +76,38 @@ export function Thumb({ size = 22 }: { size?: number }) {
     </svg>
   );
 }
+
+/** Ink-line marks for the three "Kaise chalta hai" steps: a tiffin (the group), a pencil (write it), a red thread (settle). */
+export function StepIcon({ kind }: { kind: "tiffin" | "pencil" | "thread" }) {
+  return (
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true" fill="none" stroke="#1B1A17" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {kind === "tiffin" && (
+        <>
+          <path d="M14 11V7q0-3 3-3h6q3 0 3 3v4" />
+          <path d="M9 12v22M31 12v22" />
+          <rect x="11" y="11" width="18" height="5" rx="2.5" fill="#E8578B" />
+          <rect x="12" y="16" width="16" height="8" rx="2.5" fill="#dfe5e7" />
+          <rect x="12" y="25" width="16" height="8" rx="2.5" fill="#dfe5e7" />
+        </>
+      )}
+      {kind === "pencil" && (
+        <>
+          <path d="M5 33q7-5 14-1t15-2" strokeDasharray="2 3" />
+          <g transform="rotate(-38 24 18)">
+            <rect x="12" y="15" width="22" height="6" rx="1.2" fill="#F4B400" />
+            <path d="M12 15l-6 3 6 3z" fill="#e8c98a" />
+            <rect x="31" y="15" width="3" height="6" fill="#D62828" />
+          </g>
+        </>
+      )}
+      {kind === "thread" && (
+        <>
+          <circle cx="7" cy="20" r="4" fill="#F4B400" />
+          <circle cx="33" cy="20" r="4" fill="#2E9E5B" />
+          <path d="M11 20q5-9 10 0t8 0" stroke="#C62020" strokeWidth="2" />
+          <path d="M26 16.5l3.2 3.5-4.2 1.6" stroke="#C62020" strokeWidth="2" />
+        </>
+      )}
+    </svg>
+  );
+}

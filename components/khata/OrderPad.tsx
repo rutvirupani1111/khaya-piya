@@ -69,7 +69,7 @@ export function OrderPad({ next = "/khata", compact = false }: { next?: string; 
       <div className="absolute inset-x-2 -bottom-2 top-3 rotate-[1.5deg] rounded-sm bg-[#cfd9e6] shadow" aria-hidden="true" />
       <div className="pad relative rounded-sm px-4 pb-5 shadow-xl">
         <div className="-mx-4 bg-[#e7e2d4] px-2 pt-1"><Spiral /></div>
-        <div className="flex h-[58px] items-end justify-between pb-2">
+        <div className="flex h-[34px] items-end justify-between pb-0.5">
           <p className="display text-2xl text-[var(--stamp-red-deep)]">{t("login.title")}</p>
           <p className="mono text-xs opacity-70">No. {String(new Date().getDate()).padStart(2, "0")}07</p>
         </div>

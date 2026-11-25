@@ -168,6 +168,8 @@ body {
 /* walking from one scene of the eatery to the next */
 @keyframes scene-in { from { opacity: 0; } to { opacity: 1; } }
 .scene-in { animation: scene-in 240ms ease-out both; }
+/* fast lane: after this phone's first finished split, scenes swap quicker */
+html[data-fast] .scene-in { animation-duration: 150ms; }
 @media (prefers-reduced-motion: reduce) {
   .scene-in { animation: none; }
 }

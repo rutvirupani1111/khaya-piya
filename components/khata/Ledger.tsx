@@ -214,9 +214,16 @@ export function Ledger({ initial }: { initial: GroupFull }) {
         </m.div>
         <div className="min-w-0 flex-1 pb-1">
           <Title name={g.name} onSave={rename} />
-          <p className="text-sm opacity-80">{KIND_LABEL[g.kind]} · {people.length} log · {g.role === "owner" ? "tera tiffin" : "tu bhi likh sakta hai"}</p>
+          <p className="text-sm opacity-80">{KIND_LABEL[g.kind]} · {people.length} {t("khata.ppl")} · {g.role === "owner" ? t("khata.mine") : t("khata.sharedIn")}</p>
         </div>
       </section>
+
+      <MySummary me={g.me} net={net} plan={plan} nameOf={nameOf} hasEntries={live.length > 0} />
+      {g.me && !person(g.me)?.vpa && plan.some((tr) => tr.to === g.me) && (
+        <button type="button" onClick={() => openSheet({ person: person(g.me!) ?? null })} className="tap press mt-2 w-full rounded-md border-2 border-dashed border-current px-3 text-sm font-semibold">
+          + {t("khata.addMyVpa")}
+        </button>
+      )}
 
       {/* the ledger: red cloth binding, cream ruled pages, red double margin */}
       <section className="cloth relative mt-4 rounded-md p-2 pt-3 shadow-xl" aria-label={t("khata.title")}>
@@ -240,12 +247,16 @@ export function Ledger({ initial }: { initial: GroupFull }) {
                   return (
                     <li key={p.id} className="ledger-row flex items-center gap-2 pr-3">
                       <span className="grid w-[46px] shrink-0 place-items-center"><Pattern seat={p.seat} size={16} /></span>
-                      <span className="hand min-w-0 flex-1 truncate pl-2 text-xl font-bold" style={{ color: paperInk(p.seat) }}>{p.name}{p.id === g.me ? " (tu)" : ""}</span>
+                      <span className="flex min-w-0 flex-1 items-center gap-1 pl-2">
+                        <span className="hand min-w-0 truncate text-xl font-bold" style={{ color: paperInk(p.seat) }}>{p.name}</span>
+                        {p.id === g.me && <YouPill t={t} />}
+                      </span>
                       {n === 0 ? (
                         <span className="hand text-lg opacity-70">{t("khata.even")}</span>
                       ) : (
-                        <m.span key={n} initial={{ y: -6, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="hand text-lg font-bold" style={{ color: n > 0 ? PLUS : MINUS }}>
-                          <Money p={n} sign /> <span className="text-sm font-normal">{n > 0 ? "lena" : "dena"}</span>
+                        <m.span key={n} initial={{ y: -6, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="shrink-0 text-right leading-none" style={{ color: n > 0 ? PLUS : MINUS }}>
+                          <Money p={n} sign className="hand text-lg font-bold" />
+                          <span className="block text-[11px] font-semibold">{n > 0 ? t("khata.gets") : t("khata.owes")}</span>
                         </m.span>
                       )}
                     </li>
@@ -259,10 +270,13 @@ export function Ledger({ initial }: { initial: GroupFull }) {
           {!allEven && (
             <div className="mt-2 pl-[60px] pr-3">
               {!threads ? (
-                <button type="button" onClick={() => setThreads(true)} className="tap press flex w-full items-center justify-center gap-2 rounded-md bg-[#A61E1E] text-lg font-semibold text-[#F6EED9] shadow">
-                  <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true"><path d="M1 7q5-6 10 0t10 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
-                  {t("settle.cta")}
-                </button>
+                <>
+                  <p className="text-sm leading-8 opacity-80">{t("khata.planHint")}</p>
+                  <button type="button" onClick={() => setThreads(true)} className="tap press flex w-full items-center justify-center gap-2 rounded-md bg-[#A61E1E] text-lg font-semibold text-[#F6EED9] shadow">
+                    <svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true"><path d="M1 7q5-6 10 0t10 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                    {t("settle.cta")}
+                  </button>
+                </>
               ) : (
                 <p className="hand ledger-row text-base">{plan.length} {plan.length === 1 ? "transfer" : "transfers"}, {t("khata.fewest")}</p>
               )}
@@ -273,14 +287,14 @@ export function Ledger({ initial }: { initial: GroupFull }) {
               <m.ul key="threads" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-1 pl-[54px] pr-2">
                 <AnimatePresence initial={true}>
                   {plan.map((tr, i) => (
-                    <Thread key={`${tr.from}>${tr.to}`} i={i} from={person(tr.from)} to={person(tr.to)} amount={tr.amount} groupName={g.name} onDone={() => settle(tr)} />
+                    <Thread key={`${tr.from}>${tr.to}`} i={i} from={person(tr.from)} to={person(tr.to)} me={g.me} amount={tr.amount} groupName={g.name} onDone={() => settle(tr)} />
                   ))}
                 </AnimatePresence>
               </m.ul>
             )}
           </AnimatePresence>
 
-          <h2 className="display ledger-row mt-4 pl-[60px] pr-3 text-2xl">Bahi</h2>
+          <h2 className="display ledger-row mt-4 pl-[60px] pr-3 text-2xl">{t("khata.entries")}</h2>
           {rows.length === 0 ? (
             <div className="pl-[60px] pr-3">
               <p className="hand text-lg leading-8">{t("khata.emptyBook")}</p>
@@ -306,7 +320,10 @@ export function Ledger({ initial }: { initial: GroupFull }) {
       {g.role === "owner" && <Danger gid={gid} onGone={() => { router.push("/khata"); router.refresh(); }} onError={(text) => setToast({ key: Date.now(), text, error: true })} />}
 
       <div className="fixed inset-x-0 bottom-0 z-30 mx-auto flex max-w-xl gap-2 px-4 pb-4 pt-6" style={{ background: "linear-gradient(transparent, var(--bg) 35%)" }}>
-        <Link href={`/?tiffin=${gid}`} className="tap press kot grid place-items-center rounded-md px-3 text-sm font-semibold">Naya bill</Link>
+        <Link href={`/?tiffin=${gid}`} className="tap press kot flex items-center gap-1.5 rounded-md px-3 text-sm font-semibold shadow">
+          <ReceiptGlyph />
+          {t("khata.newBill")}
+        </Link>
         <button type="button" onClick={() => openSheet("expense")} className="tap press flex flex-1 items-center justify-center gap-2 rounded-md bg-[#A61E1E] text-lg font-semibold text-[#F6EED9] shadow-lg">
           <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 15 13 5l2 2L5 17H3zM11 7l2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
           {t("khata.addExpense")}
@@ -329,6 +346,44 @@ export function Ledger({ initial }: { initial: GroupFull }) {
       </AnimatePresence>
     </main>
   );
+}
+
+/** The one line that matters most to whoever is holding the phone: do I get money, or do I owe it, and to whom. */
+function MySummary({ me, net, plan, nameOf, hasEntries }: { me: string | null; net: Record<string, number>; plan: { from: string; to: string; amount: number }[]; nameOf: (id: string) => string; hasEntries: boolean }) {
+  const { t, lang } = usePrefs();
+  if (!me || !hasEntries) return null;
+  const n = net[me] ?? 0;
+  const mine = n > 0 ? plan.filter((x) => x.to === me) : plan.filter((x) => x.from === me);
+  const who = (id: string) => (n > 0 ? (lang === "en" ? `from ${nameOf(id)}` : lang === "hi" ? `${nameOf(id)} से` : `${nameOf(id)} se`) : lang === "en" ? `to ${nameOf(id)}` : lang === "hi" ? `${nameOf(id)} को` : `${nameOf(id)} ko`);
+  const color = n > 0 ? PLUS : n < 0 ? MINUS : "#2C6B5E";
+  return (
+    <m.section layout initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={soft} aria-live="polite" className="kot mt-3 rounded-sm px-4 py-3 shadow-md" style={{ transform: "rotate(-0.5deg)" }}>
+      {n === 0 ? (
+        <p className="flex items-center gap-2 text-lg font-semibold" style={{ color }}>
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M6 10.5l2.6 2.6L14 7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          {t("khata.youEven")}
+        </p>
+      ) : (
+        <>
+          <p className="text-sm font-semibold" style={{ color }}>{n > 0 ? t("khata.youGet") : t("khata.youOwe")}</p>
+          <p className="display text-4xl leading-tight" style={{ color }}><Money p={Math.abs(n)} /></p>
+          {mine.length > 0 && (
+            <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+              {mine.map((x) => (
+                <li key={`${x.from}>${x.to}`} className="hand text-lg leading-snug">
+                  {who(n > 0 ? x.from : x.to)} <Money p={x.amount} className="font-bold" />
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </m.section>
+  );
+}
+
+function YouPill({ t }: { t: (k: "khata.you") => string }) {
+  return <span className="shrink-0 rounded-full bg-[#1B1A17] px-1.5 text-[11px] font-semibold leading-5 text-[#F6EED9]">{t("khata.you")}</span>;
 }
 
 function titleOf(r: Row, nameOf: (id: string) => string) {
@@ -367,10 +422,21 @@ function Title({ name, onSave }: { name: string; onSave: (n: string) => void }) 
 }
 
 /** A red thread pulled from the one who owes to the one who is owed. "Ho gaya" snaps it. */
-function Thread({ i, from, to, amount, groupName, onDone }: { i: number; from?: Person; to?: Person; amount: number; groupName: string; onDone: () => void }) {
+function Thread({ i, from, to, me, amount, groupName, onDone }: { i: number; from?: Person; to?: Person; me: string | null; amount: number; groupName: string; onDone: () => void }) {
+  const { t, lang } = usePrefs();
   const [copied, setCopied] = useState(false);
   if (!from || !to) return null;
-  const upi = to.vpa ? `upi://pay?pa=${encodeURIComponent(to.vpa)}&pn=${encodeURIComponent(to.name)}&am=${amountParam(amount)}&cu=INR&tn=${encodeURIComponent(`KhayaPiya ${groupName}`.slice(0, 40))}` : null;
+  const upi = to.vpa ? `upi://pay?pa=${encodeURIComponent(to.vpa)}&pn=${encodeURIComponent(to.name.replace(/[^A-Za-z .]/g, "").slice(0, 40) || "KhayaPiya")}&am=${amountParam(amount)}&cu=INR&tn=${encodeURIComponent(`KhayaPiya ${groupName}`.slice(0, 40))}` : null;
+  const toMe = to.id === me;
+  const fromMe = from.id === me;
+  // who pays whom, in words, without guessing anyone's gender
+  const line =
+    lang === "en"
+      ? `${fromMe ? "You pay" : `${from.name} pays`} ${toMe ? "you" : to.name}`
+      : lang === "hi"
+        ? `${fromMe ? "तुझसे" : `${from.name} से`} ${toMe ? "तुझे" : `${to.name} को`}`
+        : `${fromMe ? "Tujhse" : `${from.name} se`} ${toMe ? "tujhe" : `${to.name} ko`}`;
+  const remind = `https://wa.me/?text=${encodeURIComponent(`${from.name}, ${groupName} ka hisaab: ₹${amountParam(amount)} mujhe bhejna hai.${to.vpa ? ` UPI: ${to.vpa}` : ""} (KhayaPiya)`)}`;
   const ask = async () => {
     const text = `${to.name}, ${groupName} ka hisaab: ${from.name} tujhe ₹${amountParam(amount)} bhejega. Apna UPI ID bhej de.`;
     try {
@@ -388,7 +454,8 @@ function Thread({ i, from, to, amount, groupName, onDone }: { i: number; from?: 
       variants={{ hidden: { opacity: 0, height: 0 }, shown: { opacity: 1, height: "auto", transition: { duration: 0.25, delay: i * 0.08 } }, gone: { opacity: 0, height: 0, transition: { when: "afterChildren", duration: 0.22 } } }}
       className="overflow-hidden"
     >
-      <div className="relative flex items-center justify-between gap-1 pt-2">
+      <p className="pt-2 text-sm font-semibold leading-tight text-[#1B1A17]">{line}</p>
+      <div className="relative flex items-center justify-between gap-1 pt-1">
         <span className="hand z-10 min-w-0 max-w-[34%] truncate rounded-sm bg-[#f7f0dc] pr-1 text-lg font-bold" style={{ color: paperInk(from.seat) }}>{from.name}</span>
         <svg className="pointer-events-none absolute inset-x-0 top-3 h-10 w-full" viewBox="0 0 300 40" preserveAspectRatio="none" aria-hidden="true">
           <m.g variants={{ gone: { ...half.gone, rotate: -16 } }} style={{ originX: 0, originY: 0.5 }}>
@@ -396,6 +463,8 @@ function Thread({ i, from, to, amount, groupName, onDone }: { i: number; from?: 
           </m.g>
           <m.g variants={{ gone: { ...half.gone, rotate: 16 } }} style={{ originX: 1, originY: 0.5 }}>
             <m.path d="M150 22 Q 220 10 290 14" fill="none" stroke="#C62020" strokeWidth="2.4" strokeLinecap="round" initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.3, delay: 0.4 + i * 0.08, ease: "easeOut" }} />
+            {/* which way the money goes: an arrowhead tied on near the one who gets it */}
+            <m.path d="M228 6 L246 12 L230 22" fill="none" stroke="#C62020" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.7 + i * 0.08, duration: 0.15 }} />
           </m.g>
         </svg>
         <m.span variants={{ gone: { scale: 0.6, opacity: 0, transition: { duration: 0.2 } } }} className="z-10 inline-flex min-h-11 items-center rounded-full border-2 border-[#C62020] bg-[#fffaf0] px-3 text-base font-bold text-[#1B1A17] shadow">
@@ -404,12 +473,17 @@ function Thread({ i, from, to, amount, groupName, onDone }: { i: number; from?: 
         <span className="hand z-10 min-w-0 max-w-[34%] truncate rounded-sm bg-[#f7f0dc] pl-1 text-right text-lg font-bold" style={{ color: paperInk(to.seat) }}>{to.name}</span>
       </div>
       <div className="mt-1 flex gap-2 pb-2 text-sm font-semibold">
-        {upi ? (
-          <a href={upi} className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{from.name.split(" ")[0]}: UPI se bhejo</a>
+        {toMe ? (
+          <a href={remind} target="_blank" rel="noopener" className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{t("khata.remind")}</a>
+        ) : upi ? (
+          <a href={upi} className="tap press grid flex-1 place-items-center rounded-md border-2 border-[#1B1A17] px-2 text-[#1B1A17]">{fromMe ? t("khata.payUpi") : `${from.name.split(" ")[0]}: UPI`}</a>
         ) : (
-          <button type="button" onClick={ask} className="tap press flex-1 rounded-md border-2 border-dashed border-[#1B1A17] px-2 text-[#1B1A17]">{copied ? "Copy ho gaya, WhatsApp pe bhejo" : "UPI ID maango"}</button>
+          <button type="button" onClick={ask} className="tap press flex-1 rounded-md border-2 border-dashed border-[#1B1A17] px-2 text-[#1B1A17]">{copied ? "Copy ho gaya, WhatsApp pe bhejo" : t("khata.askVpa")}</button>
         )}
-        <button type="button" onClick={onDone} className="tap press rounded-md bg-[#1D6B3E] px-4 text-[#F6EED9]">Ho gaya</button>
+        <button type="button" onClick={onDone} className="tap press flex items-center gap-1.5 rounded-md bg-[#1D6B3E] px-3 text-[#F6EED9]">
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3 3 7-7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          {t("khata.done")}
+        </button>
       </div>
     </m.li>
   );
@@ -506,7 +580,7 @@ function PageTurn({ calm }: { calm: boolean }) {
   );
 }
 
-function People({ people, me, onEdit, onAdd, canAdd, t }: { people: Person[]; me: string | null; onEdit: (p: Person) => void; onAdd: () => void; canAdd: boolean; t: (k: "khata.people" | "khata.addPerson") => string }) {
+function People({ people, me, onEdit, onAdd, canAdd, t }: { people: Person[]; me: string | null; onEdit: (p: Person) => void; onAdd: () => void; canAdd: boolean; t: (k: "khata.people" | "khata.addPerson" | "khata.you") => string }) {
   return (
     <section className="kot mt-6 rounded-sm p-3 shadow-lg" style={{ transform: "rotate(-0.6deg)" }}>
       <h2 className="display text-2xl">{t("khata.people")}</h2>
@@ -516,7 +590,10 @@ function People({ people, me, onEdit, onAdd, canAdd, t }: { people: Person[]; me
             <button type="button" onClick={() => onEdit(p)} className="tap press flex w-full items-center gap-2 rounded-md border border-[#1B1A1740] px-2 py-1 text-left">
               <Pattern seat={p.seat} size={20} />
               <span className="min-w-0 flex-1">
-                <span className="hand block truncate text-lg font-bold leading-tight" style={{ color: paperInk(p.seat) }}>{p.name}{p.id === me ? " (tu)" : ""}</span>
+                <span className="flex min-w-0 items-center gap-1">
+                  <span className="hand min-w-0 truncate text-lg font-bold leading-tight" style={{ color: paperInk(p.seat) }}>{p.name}</span>
+                  {p.id === me && <YouPill t={t} />}
+                </span>
                 <span className="mono block truncate text-[10px] opacity-70">{p.vpa ?? "UPI ID nahi"}{p.userId && p.id !== me ? " · khate mein" : ""}</span>
               </span>
             </button>
@@ -558,7 +635,7 @@ function Invite({ gid, code, name, onCode, onError }: { gid: string; code: strin
   return (
     <section className="mt-6 rounded-sm border-2 border-dashed border-current p-3">
       <h2 className="hand text-xl font-bold">{t("khata.invite")}</h2>
-      <p className="text-sm opacity-80">Link se aane wala apna passkey banata hai aur is khate mein likh sakta hai.</p>
+      <p className="text-sm opacity-80">Ye link bhejo. Dost khol ke apna passkey banayega, phir is group mein kharcha likh aur dekh sakega.</p>
       <p className="mono mt-2 truncate rounded bg-[#00000010] px-2 py-2 text-xs">{origin ? link : `/g/${code}`}</p>
       <div className="mt-2 flex flex-wrap gap-2 text-sm font-semibold">
         <button type="button" onClick={copy} className="tap press rounded-md border border-current px-3">{copied ? "Copy ho gaya" : "Link copy karo"}</button>
@@ -585,7 +662,7 @@ function Danger({ gid, onGone, onError }: { gid: string; onGone: () => void; onE
   return (
     <section className="mt-6 text-sm">
       {!sure ? (
-        <button type="button" onClick={() => setSure(true)} className="tap press rounded-md px-1 font-semibold underline underline-offset-4 opacity-80">Tiffin shelf se hatao</button>
+        <button type="button" onClick={() => setSure(true)} className="tap press rounded-md px-1 font-semibold underline underline-offset-4 opacity-80">Ye group delete karo</button>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-semibold">Pakka? Saara hisaab mit jayega, wapas nahi aayega.</span>
@@ -692,6 +769,22 @@ function ExpenseSheet({ people, me, onClose, onSave }: { people: Person[]; me: s
         </ul>
         {(tried || mode === "exact") && problem && total > 0 && <p role="alert" className="mt-2 pl-[60px] text-sm font-semibold text-[#A61E1E]">{problem}</p>}
         {tried && !total && <p role="alert" className="mt-2 pl-[60px] text-sm font-semibold text-[#A61E1E]">{problem}</p>}
+        {total > 0 && !problem && (() => {
+          const owed = split.shares.map((s) => s.owed);
+          const lo = Math.min(...owed);
+          const hi = Math.max(...owed);
+          return (
+            <p className="mt-3 pl-[60px] text-base leading-snug" aria-live="polite">
+              <span className="hand text-lg font-bold">{people.find((p) => p.id === payer)?.name}</span> {t("khata.paid")} <Money p={total} className="font-semibold" />
+              {mode === "equal" && owed.length > 0 && (
+                <>
+                  {" · "}{owed.length} {t("khata.eachEqual")} <Money p={lo} className="font-semibold" />
+                  {hi !== lo && <> / <Money p={hi} className="font-semibold" /></>}
+                </>
+              )}
+            </p>
+          );
+        })()}
         <div className="mt-4 flex gap-2 pl-[60px]">
           <button type="button" onClick={onClose} className="tap press rounded-md border border-[#1B1A17] px-4 font-semibold">{t("pay.no")}</button>
           <button type="button" onClick={save} className="tap press flex-1 rounded-md bg-[#A61E1E] text-lg font-semibold text-[#F6EED9]">{t("khata.save")}</button>

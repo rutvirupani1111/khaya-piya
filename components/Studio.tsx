@@ -145,7 +145,7 @@ type InstallPrompt = { prompt: () => Promise<unknown> };
 
 /* ----------------------------- COUNTER ----------------------------- */
 export function Counter({ demo = false, localId = null }: { demo?: boolean; localId?: string | null }) {
-  const { t, calm } = usePrefs();
+  const { t, calm, fast } = usePrefs();
   const router = useRouter();
   const { d, update, undo, redo } = useDraft(localId, demo);
   const [printing, setPrinting] = useState<"idle" | "warm" | "reading">("idle");
@@ -183,8 +183,9 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
     setVisible(0);
     update(() => next);
     const n = next.items.length + next.charges.length;
-    for (let i = 1; i <= n; i++) setTimeout(() => setVisible(i), calm ? 0 : 260 + i * 140);
-  }, [d, demo, update, calm]);
+    // fast lane: a phone that has finished a split before skips the slow warm-up print
+    for (let i = 1; i <= n; i++) setTimeout(() => setVisible(i), calm ? 0 : fast ? 40 + i * 40 : 260 + i * 140);
+  }, [d, demo, update, calm, fast]);
 
   const scan = async (file: File) => {
     setErr("");
@@ -517,6 +518,12 @@ export function Table({ localId }: { localId: string }) {
   const [nag, setNag] = useState(false);
   const [tiffins, setTiffins] = useState<TiffinRef[] | null>(null);
   const [tiffinSheet, setTiffinSheet] = useState(false);
+  // drag a katori onto a thali: the plate under (or within 64 px of) the finger grows to say it will take it
+  const [dragging, setDragging] = useState(false);
+  const [hover, setHover] = useState<string | null>(null);
+  const [dropped, setDropped] = useState<{ id: string; k: number } | null>(null);
+  const plates = useRef(new Map<string, HTMLElement>());
+  const dragged = useRef(false);
   useEffect(() => {
     fetch("/api/me", { cache: "no-store" })
       .then((r) => r.json())
@@ -534,6 +541,24 @@ export function Table({ localId }: { localId: string }) {
       x.claims = has ? x.claims.filter((c) => !(c.itemId === itemId && c.memberId === memberId)) : [...x.claims, { itemId, memberId, weight: 1 }];
       return x;
     });
+  const assign = (itemId: string, memberId: string) =>
+    update((x) => (x.claims.some((c) => c.itemId === itemId && c.memberId === memberId) ? x : { ...x, claims: [...x.claims, { itemId, memberId, weight: 1 }] }));
+  /** The thali nearest the pointer, if the pointer is on it or within 64 px of its rim. */
+  const nearest = (pt: { x: number; y: number }) => {
+    const x = pt.x - window.scrollX;
+    const y = pt.y - window.scrollY;
+    let best: string | null = null;
+    let bestD = Infinity;
+    for (const [id, el] of plates.current) {
+      const r = el.getBoundingClientRect();
+      const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)) - r.width / 2;
+      if (d <= 64 && d < bestD) {
+        best = id;
+        bestD = d;
+      }
+    }
+    return best;
+  };
   const everyone = () => {
     if (sel) update((x) => ({ ...x, claims: [...x.claims.filter((c) => c.itemId !== sel), ...x.members.map((mm) => ({ itemId: sel, memberId: mm.id, weight: 1 }))] }));
     else update((x) => ({ ...x, claims: [...x.claims, ...bill.unclaimed.flatMap((iid) => x.members.map((mm) => ({ itemId: iid, memberId: mm.id, weight: 1 })))] }));
@@ -574,9 +599,13 @@ export function Table({ localId }: { localId: string }) {
           {d.members.map((mm) => {
             const has = sel ? d.claims.some((c) => c.itemId === sel && c.memberId === mm.id) : false;
             const total = bill.perMember[mm.id]?.items ?? 0;
+            const near = hover === mm.id;
+            const plop = dropped?.id === mm.id;
             return (
-              <m.button key={mm.id} type="button" disabled={!sel} onClick={() => sel && toggle(sel, mm.id)} aria-pressed={has} aria-label={`${mm.name}: ${total / 100}`} animate={{ scale: has ? 1.04 : 1 }} transition={snap} className="tap flex flex-col items-center disabled:cursor-default">
-                <Thali seat={mm.seat} name={mm.name} size={86} active={has} glow={!!sel} />
+              <m.button key={mm.id} ref={(el: HTMLButtonElement | null) => { if (el) plates.current.set(mm.id, el); else plates.current.delete(mm.id); }} type="button" disabled={!sel} onClick={() => sel && toggle(sel, mm.id)} aria-pressed={has} aria-label={`${mm.name}: ${total / 100}`} animate={{ scale: near ? 1.04 : has ? 1.04 : 1 }} transition={snap} className="tap flex flex-col items-center disabled:cursor-default">
+                <m.span key={plop ? dropped?.k ?? 0 : 0} initial={plop ? { scale: 0.86 } : false} animate={{ scale: 1 }} transition={settle} className="block">
+                  <Thali seat={mm.seat} name={mm.name} size={86} active={has || near} glow={!!sel || dragging} />
+                </m.span>
                 <span className="hand -mt-1 text-lg font-bold" style={{ color: ink(mm.seat).text }}>{mm.name}</span>
                 <Money p={total} className="text-sm text-[#1B1A17]" />
               </m.button>
@@ -589,8 +618,10 @@ export function Table({ localId }: { localId: string }) {
         </div>
         <p className="sr-only" aria-live="polite">{d.members.map((mm) => `${mm.name}: ₹${((bill.perMember[mm.id]?.items ?? 0) / 100).toFixed(2)}`).join(", ")}</p>
 
-        {/* the bill strip holding katoris */}
-        <section className="kot torn-bottom mt-5 rounded-t-md px-3 pt-3 shadow-lg">
+        {/* the bill strip holding katoris; the torn paper is its own layer so a dragged katori is never clipped */}
+        <section className="relative mt-5">
+          <div aria-hidden="true" className="kot torn-bottom absolute inset-0 rounded-t-md shadow-lg" />
+          <div className="relative px-3 pb-[18px] pt-3 text-[#1B1A17]">
           <ul className="flex flex-wrap gap-2">
             {d.items.map((it) => {
               const cl = d.claims.filter((c) => c.itemId === it.id);
@@ -598,8 +629,24 @@ export function Table({ localId }: { localId: string }) {
               const active = sel === it.id;
               return (
                 <li key={it.id}>
-                  <m.button layoutId={`line-${it.id}`} type="button" onClick={() => setSel(active ? null : it.id)} aria-pressed={active} animate={{ scale: active ? 1.08 : 1, y: active ? -4 : 0 }} transition={snap}
-                    className={`tap flex items-center gap-1.5 rounded-xl border-2 bg-[#fffaf0] px-2 py-1 text-left shadow ${active ? "border-[var(--haldi)]" : "border-transparent"} ${un && !calm && !active ? "wobble" : ""}`}>
+                  <m.button layoutId={`line-${it.id}`} type="button"
+                    onClick={() => { if (dragged.current) return; setSel(active ? null : it.id); }}
+                    drag={!calm} dragSnapToOrigin dragMomentum={false} dragElastic={1}
+                    whileDrag={{ scale: 1.08, zIndex: 40, boxShadow: "6px 12px 18px rgba(27,26,23,.28)" }}
+                    onDragStart={() => { dragged.current = true; setDragging(true); setSel(null); }}
+                    onDrag={(_, info) => setHover(nearest(info.point))}
+                    onDragEnd={(_, info) => {
+                      const to = nearest(info.point);
+                      setHover(null);
+                      setDragging(false);
+                      if (to) {
+                        assign(it.id, to);
+                        setDropped({ id: to, k: Date.now() });
+                      }
+                      setTimeout(() => (dragged.current = false), 0);
+                    }}
+                    aria-pressed={active} animate={{ scale: active ? 1.08 : 1, y: active ? -4 : 0 }} transition={snap}
+                    className={`tap flex items-center gap-1.5 rounded-xl border-2 bg-[#fffaf0] px-2 py-1 text-left shadow ${active ? "border-[var(--haldi)]" : "border-transparent"} ${un && !calm && !active && !dragging ? "wobble" : ""}`}>
                     <Katori size={30} fill={un ? "#F4B400" : "#c6cfd2"} />
                     <span className="text-sm leading-tight">
                       <span className="block max-w-[9rem] truncate font-semibold">{it.qty > 1 ? `${it.qty} x ` : ""}{it.name}</span>
@@ -621,6 +668,7 @@ export function Table({ localId }: { localId: string }) {
               )}
             </div>
           )}
+          </div>
         </section>
       </div>
 
@@ -788,11 +836,12 @@ function Roti({ d, itemId, onClose, update }: { d: Draft; itemId: string; onClos
 /* ----------------------------- SHELF ----------------------------- */
 const KINDS: ChargeKind[] = ["cgst", "sgst", "igst", "vat", "service", "packing", "tip", "discount"];
 export function Shelf({ localId }: { localId: string }) {
-  const { t } = usePrefs();
+  const { t, calm, lite } = usePrefs();
   const router = useRouter();
   const { d, update, undo } = useDraft(localId, false);
   const [open, setOpen] = useState<string | null>(null);
-  const [poured, setPoured] = useState<string | null>(null);
+  // the jar being poured, kept for 2 s so every thali can show what landed in it
+  const [poured, setPoured] = useState<{ id: string; k: number } | null>(null);
   const [vpa, setVpa] = useState("");
   const [payee, setPayee] = useState("");
   const [busy, setBusy] = useState(false);
@@ -835,8 +884,8 @@ export function Shelf({ localId }: { localId: string }) {
         <section className="relative mt-3">
           <div className="flex gap-1 overflow-x-auto pb-2 pt-4">
             {d.charges.map((c) => (
-              <button key={c.id} type="button" onClick={() => { setOpen(open === c.id ? null : c.id); setPoured(c.id); setTimeout(() => setPoured(null), 900); if (c.kind === "service") setNoteShown(true); }} aria-expanded={open === c.id} className="tap shrink-0">
-                <Jar label={c.label.slice(0, 10)} amount={`₹${((bill.chargeAmounts[c.id] ?? 0) / 100).toFixed(2)}`} color={JAR_COLOR[c.kind]} tipped={poured === c.id && !c.removed && !c.included} closed={c.removed} outline={c.included} flipped={c.kind === "discount"} />
+              <button key={c.id} type="button" onClick={() => { setOpen(open === c.id ? null : c.id); const k = Date.now(); setPoured({ id: c.id, k }); setTimeout(() => setPoured((p) => (p?.k === k ? null : p)), 2000); if (c.kind === "service") setNoteShown(true); }} aria-expanded={open === c.id} className="tap shrink-0">
+                <Jar label={c.label.slice(0, 10)} amount={`₹${((bill.chargeAmounts[c.id] ?? 0) / 100).toFixed(2)}`} color={JAR_COLOR[c.kind]} tipped={poured?.id === c.id && !c.removed && !c.included} closed={c.removed} outline={c.included} flipped={c.kind === "discount"} />
               </button>
             ))}
             {bill.autoRoundoff !== 0 && (
@@ -894,8 +943,25 @@ export function Shelf({ localId }: { localId: string }) {
             {d.members.map((mm) => {
               const p = bill.perMember[mm.id];
               const coins = bill.bonuses.filter((b) => b.memberId === mm.id);
+              const pc = poured ? d.charges.find((c) => c.id === poured.id) : null;
+              const got = pc && !pc.removed && !pc.included ? p?.charges?.[pc.id] ?? 0 : 0;
+              const most = pc ? Math.max(1, ...d.members.map((x) => Math.abs(bill.perMember[x.id]?.charges?.[pc.id] ?? 0))) : 1;
+              const width = Math.max(2, Math.min(14, Math.round((14 * Math.abs(got)) / most)));
               return (
-                <li key={mm.id} className="kot rounded-lg p-2 text-xs">
+                <li key={mm.id} className="kot relative rounded-lg p-2 text-xs">
+                  {pc && got !== 0 && (
+                    <>
+                      {/* the pour: a stream as wide as this thali's share drops in (a discount flows back up to its jar) */}
+                      {!calm && (lite ? (
+                        <m.span key={`dot${poured!.k}`} aria-hidden="true" className="pointer-events-none absolute -top-2 left-1/2 size-2 rounded-full" style={{ background: JAR_COLOR[pc.kind] }} initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: [0, 1, 0] }} transition={{ duration: 0.9 }} />
+                      ) : (
+                        <m.span key={`pour${poured!.k}`} aria-hidden="true" className="pointer-events-none absolute -top-9 left-1/2 h-12 -translate-x-1/2 rounded-full" style={{ width, background: JAR_COLOR[pc.kind], transformOrigin: pc.kind === "discount" ? "50% 0%" : "50% 100%" }} initial={{ scaleY: 0, opacity: 0.9 }} animate={{ scaleY: [0, 1, 1, 0], opacity: [0.9, 0.9, 0.9, 0] }} transition={{ duration: 1.1, times: [0, 0.35, 0.7, 1], ease: "easeOut" }} />
+                      ))}
+                      <m.span key={`lbl${poured!.k}`} className="mono absolute -top-3 right-1 z-10 rounded bg-[#1B1A17] px-1.5 py-0.5 text-[11px] text-[#F6EED9] shadow" initial={{ y: -6, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: calm ? 0 : 0.35, duration: 0.2 }}>
+                        <Money p={got} sign /> {pc.label.slice(0, 10)}
+                      </m.span>
+                    </>
+                  )}
                   <div className="flex items-center gap-1"><Pattern seat={mm.seat} /><span className="hand text-base font-bold" style={{ color: ink(mm.seat).text }}>{mm.name}</span></div>
                   <div className="mono mt-1 flex justify-between"><span>Items</span><Money p={p?.items ?? 0} /></div>
                   {Object.entries(p?.charges ?? {}).map(([cid, a]) => (

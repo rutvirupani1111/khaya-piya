@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { KhataHome } from "@/components/khata/Home";
+import { HowItWorks, KhataHome } from "@/components/khata/Home";
 import { OrderPad } from "@/components/khata/OrderPad";
 import { Tiffin } from "@/components/khata/art";
 import { history, listGroups } from "@/lib/db/tenant";
@@ -21,10 +21,11 @@ export default async function Page() {
         <section className="cloth mt-3 flex items-end gap-3 rounded-md px-5 pb-4 pt-6 shadow-xl">
           <div className="flex-1">
             <h1 className="display text-5xl text-[var(--haldi)]">Khata</h1>
-            <p className="hand mt-1 text-lg leading-snug">Flat, lunch gang aur trip ka chalta hisaab. Kaun kitna dega, kam se kam transfers mein.</p>
+            <p className="hand mt-1 text-lg leading-snug">Flat, office lunch aur trip ka chalta hisaab. Kaun kisko kitna dega, yahan saaf dikhega.</p>
           </div>
           <Tiffin n={1} size={70} />
         </section>
+        <HowItWorks />
         <OrderPad next="/khata" />
       </main>
     );
