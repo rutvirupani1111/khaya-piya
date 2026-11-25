@@ -326,7 +326,7 @@ function ClaimList({ room, canClaim }: { room: RoomApi; canClaim: boolean }) {
               </button>
               {canClaim && mineC && others.length > 0 && it.qty === 1 && (
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                  <span className="rounded-full bg-[var(--haldi)] px-2 py-1 font-semibold text-[#1B1A17]">{v.members.find((x) => x.id === others[0].memberId)?.name} {t("claim.shared")}</span>
+                  <span className="rounded-full bg-[var(--haldi)] px-2 py-1 font-semibold text-[#1B1A17]">{others.length === 1 ? `${v.members.find((x) => x.id === others[0].memberId)?.name} ${t("claim.shared")}` : `${cl.length} ${t("claim.sharedMany")}`}</span>
                   <button type="button" className="tap press rounded border px-2" onClick={() => room.send({ type: "unclaim", itemId: it.id, memberId: me })}>{t("claim.notMine")}</button>
                 </div>
               )}
@@ -383,17 +383,23 @@ function Coupon({ room, memberId }: { room: RoomApi; memberId: string }) {
           {Object.entries(mb.charges).map(([cid, a]) => <li key={cid} className="flex justify-between opacity-80"><span>{v.charges.find((c) => c.id === cid)?.label ?? "Round off"}</span><Money p={a} sign /></li>)}
           {v.bill.bonuses.filter((b) => b.memberId === memberId).map((b, i) => <li key={i} className="hand flex items-center gap-1 text-[var(--chai)]"><Coin size={14} /> +1 paisa ({b.label}): remainder sabse bada tha</li>)}
         </ul>
-        <div className="mt-2 border-t-2 border-dashed border-[#1B1A1760] pt-2 text-right"><span className="display text-4xl"><Money p={mb.total} /></span></div>
+        {/* PAID and MILA land beside the total, where the money is, instead of over a line of the bill */}
+        <div className="mt-2 flex min-h-14 items-center justify-between gap-2 border-t-2 border-dashed border-[#1B1A1760] pt-2">
+          <span className="shrink-0">
+            {(pay.state === "sent" || settled) && (
+              <m.span key={pay.state} className="inline-block" initial={{ scale: 1.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={snap}>
+                {settled ? <Stamp text={pay.state === "cash" ? "CASH" : "MILA"} color="var(--chutney-deep)" rotate={4} /> : <Stamp text="PAID" color="var(--stamp-red)" />}
+              </m.span>
+            )}
+          </span>
+          <span className="display text-4xl"><Money p={mb.total} /></span>
+        </div>
         <div className={`mt-3 flex items-center gap-3 ${ios ? "flex-col-reverse" : ""}`}>
           <button type="button" onClick={() => setBig(!big)} aria-label={t("pay.scan")} className={`shrink-0 rounded bg-white p-1 transition-[width] ${big ? "w-full" : "w-28"}`} dangerouslySetInnerHTML={{ __html: qr }} />
           <div className="text-xs">
             <p className="mono">{v.vpaMasked}</p>
             <button type="button" className="tap press mt-1 rounded border border-[#1B1A17] px-2 font-semibold" onClick={async () => { await navigator.clipboard.writeText(vpa).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? "Copied" : t("pay.copy")}</button>
           </div>
-        </div>
-        <div className="absolute right-6 top-10">
-          {pay.state === "sent" && <Stamp text="PAID" color="var(--stamp-red)" />}
-          {settled && <Stamp text={pay.state === "cash" ? "CASH" : "MILA"} color="var(--chutney-deep)" rotate={4} />}
         </div>
         {pay.state === "sent" && <p className="mt-2 text-sm font-semibold">{t("pay.waiting")}</p>}
       </div>

@@ -63,6 +63,7 @@ const M = {
   "host.lock": ["Items lock karo", "Lock items", "आइटम लॉक करो"],
   "host.close": ["Room band karo", "Close room", "रूम बंद करो"],
   "claim.shared": ["ke saath aadha. Badlo?", "shares it with you. Change?", "के साथ आधा। बदलें?"],
+  "claim.sharedMany": ["log baant rahe hain. Badlo?", "people share it. Change?", "लोग बाँट रहे हैं। बदलें?"],
   "claim.ok": ["Theek hai", "Fine", "ठीक है"],
   "claim.notMine": ["Mera nahi", "Not mine", "मेरा नहीं"],
   "undo": ["Wapas lo", "Undo", "वापस लो"],
