@@ -9,13 +9,15 @@ import { DEV_COOKIE, hostCookie } from "@/lib/server/security";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { robots: { index: false, follow: false }, referrer: "no-referrer", title: "KhayaPiya bill" };
 
-export default async function Page({ params }: { params: Promise<{ code: string }> }) {
+export default async function Page({ params, searchParams }: { params: Promise<{ code: string }>; searchParams: Promise<{ as?: string }> }) {
   const code = (await params).code.toUpperCase();
   if (!/^[0-9A-HJKMNP-TV-Z]{7}$/.test(code)) notFound();
   const room = await loadRoom(null, code);
   if (!room) notFound();
   const c = await cookies();
-  const actor = await resolveActor(null, room, c.get(hostCookie(code))?.value, c.get(DEV_COOKIE)?.value || "none");
+  // "Dost ke phone jaisa dekho": the host previews the folder exactly as a friend who has not joined sees it
+  const preview = (await searchParams).as === "guest";
+  const actor = preview ? { isHost: false, memberId: null } : await resolveActor(null, room, c.get(hostCookie(code))?.value, c.get(DEV_COOKIE)?.value || "none");
   const snap = toSnapshot(room, actor);
   const me = actor.memberId;
   return (
@@ -24,7 +26,7 @@ export default async function Page({ params }: { params: Promise<{ code: string 
         <style>{`.kp-folder{display:none}`}</style>
         <main style={{ padding: 16, maxWidth: 560, margin: "0 auto" }}>
           <h1 className="display" style={{ fontSize: 28 }}>{snap.restaurant || "Bill"}</h1>
-          {!me && (
+          {!me && !preview && (
             <form method="post" action={`/api/r/${code}/form`}>
               <input type="hidden" name="action" value="join" />
               <label>Tera naam? <input name="name" maxLength={24} required className="kot" style={{ minHeight: 44 }} /></label>
@@ -60,7 +62,7 @@ export default async function Page({ params }: { params: Promise<{ code: string 
           )}
         </main>
       </noscript>
-      <Room initial={snap} />
+      <Room initial={snap} preview={preview} />
     </>
   );
 }

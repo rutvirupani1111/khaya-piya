@@ -1,16 +1,25 @@
 "use client";
 import { AnimatePresence, m } from "motion/react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeBill, toPaise, type Charge, type ChargeKind, type Item } from "@/lib/money";
 import { parseBill, parseQuick } from "@/lib/parse";
-import { DEMO_TEXT, demoDraft, kvGet, kvSet, loadDraft, newDraft, saveDraft, uid, type Draft } from "@/lib/draft";
+import { DEMO_TEXT, demoDraft, kvGet, kvSet, loadDraft, newDraft, saveDraft, uid, type Draft, type DraftMember } from "@/lib/draft";
 import { Bell, Coin, Jar, Katori, Money, Pattern, Printer, Scale, Stamp, Thali, ink } from "./art";
+import { Tiffin, tiffinInk } from "./khata/art";
 import { LangSwitch, usePrefs } from "./Prefs";
 
 const snap = { type: "spring", stiffness: 520, damping: 34 } as const;
 const settle = { type: "spring", stiffness: 420, damping: 32 } as const;
 const JAR_COLOR: Record<string, string> = { cgst: "#F4B400", sgst: "#F4B400", igst: "#F4B400", utgst: "#F4B400", vat: "#E8578B", service: "#2E9E5B", packing: "#8A5A34", delivery: "#1F8A8A", tip: "#B87333", discount: "#D62828", roundoff: "#B8C2C6", other: "#6B3E26" };
+
+/** The draft id from the address bar. Offline, the service worker serves one cached /bill shell for every id. */
+function idFromPath(fallback: string | null) {
+  if (!fallback || typeof window === "undefined") return fallback;
+  const m = window.location.pathname.match(/^\/bill\/([^/]+)/);
+  return m ? decodeURIComponent(m[1]) : fallback;
+}
 
 function useDraft(localId: string | null, demo: boolean) {
   const [d, setD] = useState<Draft | null>(null);
@@ -18,9 +27,10 @@ function useDraft(localId: string | null, demo: boolean) {
   const fut = useRef<Draft[]>([]);
   useEffect(() => {
     (async () => {
-      if (localId) {
-        const x = await loadDraft(localId).catch(() => undefined);
-        setD(x ?? newDraft());
+      const id = idFromPath(localId);
+      if (id) {
+        const x = await loadDraft(id).catch(() => undefined);
+        setD(x ?? { ...newDraft(), id });
       } else setD(demo ? demoDraft() : newDraft());
     })();
   }, [localId, demo]);
@@ -77,6 +87,62 @@ function applyParsed(d: Draft, text: string): Draft {
   return { ...d, restaurant: d.restaurant || p.restaurant, printedTotal: p.total ?? p.subtotal ?? d.printedTotal, items: [...d.items, ...items], charges: [...d.charges, ...charges] };
 }
 
+/* ----------------------------- TIFFINS ----------------------------- */
+interface GroupLite { id: string; name: string; me: string | null; people: { id: string; name: string; seat: number }[]; entries: { kind: string; shares: { personId: string }[] }[] }
+interface TiffinRef { id: string; name: string; kind: string; people: number }
+
+/**
+ * Seat a tiffin's people at the table: the signed-in person keeps the host seat, people already at the
+ * table keep their claims (matched by person, then by name), and the rest follow in the tiffin's seat order.
+ * `onlyLast` is "Pichhli baar wali seating": just the people on the tiffin's last bill.
+ */
+function seatsFromGroup(d: Draft, g: GroupLite, onlyLast: boolean): Draft {
+  let people = [...g.people].sort((a, b) => a.seat - b.seat);
+  const last = g.entries.find((e) => e.kind === "bill");
+  if (onlyLast && last) {
+    const ids = new Set(last.shares.map((x) => x.personId));
+    if (g.me) ids.add(g.me);
+    people = people.filter((p) => ids.has(p.id));
+  }
+  const host = d.members[0];
+  const mine = people.find((p) => p.id === g.me);
+  const used = new Set<string>([host.id]);
+  const members: DraftMember[] = [{ ...host, seat: 1, name: mine ? mine.name.slice(0, 24) : host.name, personId: mine?.id ?? null }];
+  for (const p of people) {
+    if (p === mine) continue;
+    const ex = d.members.find((x) => !used.has(x.id) && (x.personId === p.id || x.name.trim().toLowerCase() === p.name.trim().toLowerCase()));
+    const id = ex?.id ?? uid();
+    used.add(id);
+    members.push({ id, seat: members.length + 1, name: p.name.slice(0, 24), personId: p.id });
+  }
+  for (const x of d.members) if (!used.has(x.id)) members.push({ ...x, seat: members.length + 1, personId: null });
+  const kept = members.slice(0, 20);
+  const ids = new Set(kept.map((x) => x.id));
+  return { ...d, members: kept, claims: d.claims.filter((c) => ids.has(c.memberId)), groupId: g.id, groupName: g.name };
+}
+const detachGroup = (d: Draft): Draft => ({ ...d, groupId: null, groupName: null, members: d.members.map((x) => ({ ...x, personId: null })) });
+
+async function fetchGroup(id: string): Promise<GroupLite | null> {
+  const r = await fetch(`/api/groups/${id}`, { cache: "no-store" });
+  return r.ok ? ((await r.json()) as GroupLite) : null;
+}
+
+/** A small red cloth khata, the Counter's way into the ledger. */
+function KhataBook() {
+  return (
+    <svg width="34" height="40" viewBox="0 0 34 40" aria-hidden="true">
+      <rect x="4" y="3" width="26" height="34" rx="2" fill="#8e1c1c" stroke="#1B1A17" strokeWidth="1.5" />
+      <path d="M8 3v34" stroke="#5e1010" strokeWidth="2" />
+      <path d="M30 6h2v28h-2" fill="#f7f0dc" stroke="#1B1A17" strokeWidth="1" />
+      <rect x="12" y="11" width="14" height="8" rx="1" fill="#f7f0dc" />
+      <path d="M14 15h10" stroke="#A61E1E" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M24 37q1 2-1 3" fill="none" stroke="#F4B400" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+type InstallPrompt = { prompt: () => Promise<unknown> };
+
 /* ----------------------------- COUNTER ----------------------------- */
 export function Counter({ demo = false, localId = null }: { demo?: boolean; localId?: string | null }) {
   const { t, calm } = usePrefs();
@@ -91,6 +157,23 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
   const [visible, setVisible] = useState(9999);
   const quickRef = useRef<HTMLTextAreaElement>(null);
   const startedDemo = useRef(false);
+  const [install, setInstall] = useState<InstallPrompt | null>(null);
+  const ready = !!d;
+
+  // "Ghar pe rakh lo": only after this phone has seen two finalised splits, and never again once refused
+  useEffect(() => {
+    const check = () => {
+      try {
+        const ev = (window as unknown as { __kpInstall?: InstallPrompt }).__kpInstall;
+        if (!ev || localStorage.getItem("kp_install_no") === "1") return;
+        const finals = JSON.parse(localStorage.getItem("kp_finals") || "[]") as string[];
+        if (finals.length >= 2) setInstall(ev);
+      } catch {}
+    };
+    check();
+    window.addEventListener("kp-install", check);
+    return () => window.removeEventListener("kp-install", check);
+  }, []);
 
   // demo: print the cached sample bill line by line, no OCR download
   useEffect(() => {
@@ -123,6 +206,32 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
       setPrinting("idle");
     }
   };
+
+  // arrivals: "Naya bill" from a tiffin (?tiffin=id) and a photo shared into the app (?shared=1)
+  useEffect(() => {
+    if (!ready || demo || localId) return;
+    const q = new URLSearchParams(window.location.search);
+    const tiffin = q.get("tiffin");
+    const shared = q.get("shared");
+    if (tiffin || shared) window.history.replaceState(null, "", "/");
+    if (tiffin && /^[0-9a-f-]{36}$/.test(tiffin)) {
+      fetchGroup(tiffin)
+        .then((g) => {
+          if (g) update((x) => (x.groupId === g.id ? x : seatsFromGroup(x, g, false)));
+        })
+        .catch(() => {});
+    }
+    if (shared === "1" && "caches" in window) {
+      (async () => {
+        const c = await caches.open("kp-share");
+        const r = await c.match("/__shared-bill");
+        if (!r) return;
+        const b = await r.blob();
+        await c.delete("/__shared-bill");
+        scan(new File([b], "bill", { type: b.type || "image/jpeg" }));
+      })().catch(() => {});
+    }
+  }, [ready, demo, localId]);
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -172,9 +281,22 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
       <header className="chalk relative rounded-xl px-4 pb-4 pt-3 shadow-[inset_0_0_0_6px_#5b3b22]">
         <div className="flex items-start justify-between gap-2">
           <h1 className="display text-4xl text-[#F4B400]">KhayaPiya</h1>
-          <Bell className="h-9 w-10" />
+          <div className="flex items-start gap-1">
+            <Link href="/khata" className="tap press -mt-1 flex flex-col items-center" aria-label="Khata: chalta hisaab">
+              <KhataBook />
+              <span className="hand -mt-0.5 text-xs leading-none">Khata</span>
+            </Link>
+            <Bell className="h-9 w-10" />
+          </div>
         </div>
         <p className="hand text-lg">{t("counter.title")}</p>
+        {d.groupId && (
+          <p className="hand mt-1 flex items-center gap-2 text-base">
+            <Tiffin n={tiffinInk(d.groupId)} size={22} />
+            <span className="min-w-0 flex-1 truncate">{d.groupName} ka bill</span>
+            <button type="button" onClick={() => update(detachGroup)} className="tap underline underline-offset-4">hatao</button>
+          </p>
+        )}
         <div className="mt-3 grid grid-cols-3 gap-2">
           <label className="tap press hand grid cursor-pointer place-items-center rounded-lg border border-dashed border-[#f1ecdf80] px-1 py-2 text-center text-lg leading-tight">
             {t("counter.photo")}
@@ -298,10 +420,25 @@ export function Counter({ demo = false, localId = null }: { demo?: boolean; loca
         <button type="button" onClick={addQuick} className="tap press mt-2 rounded-md bg-[var(--ink-on-bg)] px-4 font-semibold text-[var(--bg)]">{t("counter.addLine")}</button>
         {err && <p role="alert" className="mt-2 font-semibold text-[var(--stamp-red)]">{err}</p>}
         {!demo && (
-          <a href="/demo" className="tap press mt-4 inline-flex items-center gap-2 rounded-md border border-current px-3 py-2 text-sm">
-            <svg width="18" height="22" viewBox="0 0 18 22" aria-hidden="true"><path d="M9 1v20M4 6h10v5H4z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-            {t("counter.demo")}
-          </a>
+          <div className="mt-4 flex flex-wrap items-start gap-3">
+            <a href="/demo" className="tap press inline-flex items-center gap-2 rounded-md border border-current px-3 py-2 text-sm">
+              <svg width="18" height="22" viewBox="0 0 18 22" aria-hidden="true"><path d="M9 1v20M4 6h10v5H4z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+              {t("counter.demo")}
+            </a>
+            <AnimatePresence>
+              {install && (
+                <m.div key="install" role="note" initial={{ y: -30, rotate: -10, opacity: 0 }} animate={{ y: 0, rotate: -3, opacity: 1 }} exit={{ y: 20, opacity: 0 }} transition={snap} className="kot relative rounded-sm px-3 pb-2 pt-3 text-[#1B1A17] shadow-lg">
+                  <span className="absolute -top-2 left-1/2 h-4 w-1 -translate-x-1/2 rounded bg-[#c9a24a]" aria-hidden="true" />
+                  <p className="hand text-lg font-bold">Ghar pe rakh lo</p>
+                  <p className="text-xs">Home screen pe KhayaPiya, bina network ke bhi khulega.</p>
+                  <div className="mt-1 flex gap-2 text-sm font-semibold">
+                    <button type="button" className="tap press rounded-md bg-[#1B1A17] px-3 text-[#F6EED9]" onClick={async () => { await install.prompt().catch(() => {}); setInstall(null); }}>Rakh lo</button>
+                    <button type="button" className="tap press rounded-md border border-[#1B1A17] px-3" onClick={() => { try { localStorage.setItem("kp_install_no", "1"); } catch {} setInstall(null); }}>Kabhi nahi</button>
+                  </div>
+                </m.div>
+              )}
+            </AnimatePresence>
+          </div>
         )}
       </section>
 
@@ -378,8 +515,18 @@ export function Table({ localId }: { localId: string }) {
   const [weights, setWeights] = useState<string | null>(null);
   const [friend, setFriend] = useState("");
   const [nag, setNag] = useState(false);
+  const [tiffins, setTiffins] = useState<TiffinRef[] | null>(null);
+  const [tiffinSheet, setTiffinSheet] = useState(false);
+  useEffect(() => {
+    fetch("/api/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j: { user: unknown; groups?: TiffinRef[] }) => {
+        if (j.user && j.groups?.length) setTiffins(j.groups);
+      })
+      .catch(() => {});
+  }, []);
   const bill = useMemo(() => (d ? computeBill({ members: d.members, items: d.items, charges: [], claims: d.claims, printedTotal: null }) : null), [d]);
-  if (!d || !bill) return <main className="formica min-h-dvh" aria-busy="true" />;
+  if (!d || !bill) return <TableSkeleton />;
 
   const toggle = (itemId: string, memberId: string) =>
     update((x) => {
@@ -406,11 +553,21 @@ export function Table({ localId }: { localId: string }) {
   return (
     <main className="formica min-h-dvh pb-44">
       <div className="mx-auto max-w-xl px-4 pt-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="display text-4xl text-[#1B1A17]">{t("table.title")}</h1>
-          <a href={`/demo`} className="sr-only">demo</a>
+          {tiffins && !d.demo && (
+            <button type="button" onClick={() => setTiffinSheet(true)} className="tap press flex shrink-0 items-center gap-1.5 rounded-full bg-[#1B1A17] pl-2 pr-3 text-sm font-semibold text-[#F6EED9] shadow">
+              <Tiffin n={2} size={20} /> {t("khata.fromTiffin")}
+            </button>
+          )}
         </div>
         <p className="text-sm font-semibold text-[#1B1A17]">{t("table.pick")}</p>
+        {d.groupId && (
+          <p className="hand mt-1 inline-flex -rotate-1 items-center gap-2 rounded-sm bg-[#8e1c1c] pl-2 text-base text-[#F6EED9] shadow">
+            {d.groupName} ke log
+            <button type="button" onClick={() => update(detachGroup)} aria-label="Tiffin hatao" className="tap grid place-items-center text-lg">×</button>
+          </p>
+        )}
 
         {/* thalis in a ring */}
         <div className="mt-3 grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4" style={{ transform: calm ? undefined : "perspective(900px) rotateX(6deg)" }}>
@@ -486,7 +643,100 @@ export function Table({ localId }: { localId: string }) {
       </div>
 
       <AnimatePresence>{weights && <Roti key={weights} d={d} itemId={weights} onClose={() => setWeights(null)} update={update} />}</AnimatePresence>
+      <AnimatePresence>
+        {tiffinSheet && tiffins && (
+          <TiffinSheet
+            tiffins={tiffins}
+            onClose={() => setTiffinSheet(false)}
+            onPick={(g, onlyLast) => {
+              update((x) => seatsFromGroup(x, g, onlyLast));
+              setTiffinSheet(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </main>
+  );
+}
+
+/** Empty thalis in their final ring and a blank bill strip with dotted lines, while the draft loads. */
+function TableSkeleton() {
+  return (
+    <main className="formica min-h-dvh" aria-busy="true" aria-label="Table lag raha hai">
+      <div className="mx-auto max-w-xl px-4 pt-4">
+        <div className="ph h-10 w-48" />
+        <div className="ph mt-2 h-4 w-64" />
+        <div className="mt-3 grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex flex-col items-center">
+              <div className="size-[86px] rounded-full border-[3px] border-dashed border-[#1B1A1733]" />
+              <div className="ph mt-1 h-4 w-14" />
+            </div>
+          ))}
+        </div>
+        <div className="kot torn-bottom mt-5 rounded-t-md px-3 pt-3">
+          {[0, 1, 2].map((i) => <div key={i} className="my-3 border-b-2 border-dotted border-[#1B1A1733]" />)}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/** Pick a tiffin from the Khata shelf and seat its people. "Pichhli baar wali seating" is its last bill's people. */
+function TiffinSheet({ tiffins, onClose, onPick }: { tiffins: TiffinRef[]; onClose: () => void; onPick: (g: GroupLite, onlyLast: boolean) => void }) {
+  const { t } = usePrefs();
+  const [loading, setLoading] = useState<string | null>(null);
+  const [g, setG] = useState<GroupLite | null>(null);
+  const [err, setErr] = useState("");
+  const choose = async (id: string) => {
+    setLoading(id);
+    setErr("");
+    try {
+      const x = await fetchGroup(id);
+      if (!x) throw new Error("gone");
+      if (!x.entries.some((e) => e.kind === "bill")) return onPick(x, false);
+      setG(x);
+    } catch {
+      setErr("Tiffin nahi khula. Network check karke phir try karo.");
+    }
+    setLoading(null);
+  };
+  const last = g?.entries.find((e) => e.kind === "bill");
+  const lastNames = g && last ? g.people.filter((p) => p.id === g.me || last.shares.some((x) => x.personId === p.id)).map((p) => p.name) : [];
+  return (
+    <m.div className="fixed inset-0 z-50 flex items-end bg-[#0008]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      <m.div role="dialog" aria-modal="true" aria-label={t("khata.fromTiffin")} className="teak mx-auto w-full max-w-xl rounded-t-2xl px-4 pb-6 pt-4 text-[#F6EED9]" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={snap} onClick={(e) => e.stopPropagation()}>
+        <h2 className="display text-3xl">{g ? g.name : t("khata.fromTiffin")}</h2>
+        {!g ? (
+          <ul className="mt-3 flex gap-3 overflow-x-auto pb-2">
+            {tiffins.map((x) => (
+              <li key={x.id} className="shrink-0">
+                <button type="button" disabled={!!loading} onClick={() => choose(x.id)} className="tap press flex w-24 flex-col items-center disabled:opacity-60">
+                  <m.span animate={loading === x.id ? { y: [0, -6, 0] } : { y: 0 }} transition={{ repeat: loading === x.id ? Infinity : 0, duration: 0.6 }}>
+                    <Tiffin n={tiffinInk(x.id)} size={64} tiers={x.kind === "trip" ? 2 : x.kind === "lunch" ? 4 : 3} />
+                  </m.span>
+                  <span className="kot hand -mt-1 w-full -rotate-2 truncate rounded-sm px-1 text-center text-base font-bold">{x.name}</span>
+                  <span className="mt-0.5 text-xs opacity-80">{x.people} log</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="mt-3 grid gap-2">
+            <button type="button" onClick={() => onPick(g, true)} className="tap press kot rounded-md px-3 py-2 text-left text-[#1B1A17]">
+              <span className="block text-lg font-bold">Pichhli baar wali seating</span>
+              <span className="hand block truncate text-base">{lastNames.join(", ")}</span>
+            </button>
+            <button type="button" onClick={() => onPick(g, false)} className="tap press rounded-md border-2 border-[#F6EED9] px-3 py-2 text-left">
+              <span className="block text-lg font-bold">Pura tiffin ({g.people.length} log)</span>
+              <span className="hand block truncate text-base">{g.people.map((p) => p.name).join(", ")}</span>
+            </button>
+          </div>
+        )}
+        {err && <p role="alert" className="mt-2 font-semibold text-[#FFB4AC]">{err}</p>}
+        <p className="mt-3 text-sm opacity-80">Room khulte hi bill is tiffin ke khate mein likha jayega.</p>
+      </m.div>
+    </m.div>
   );
 }
 
@@ -552,7 +802,7 @@ export function Shelf({ localId }: { localId: string }) {
     kvGet<{ vpa: string; payee: string }>("host").then((h) => { if (h) { setVpa(h.vpa); setPayee(h.payee); } }).catch(() => {});
   }, []);
   const bill = useMemo(() => (d ? computeBill({ members: d.members, items: d.items, charges: d.charges, claims: d.claims, printedTotal: d.printedTotal }) : null), [d]);
-  if (!d || !bill) return <main className="min-h-dvh" aria-busy="true" />;
+  if (!d || !bill) return <ShelfSkeleton />;
   const sumShares = Object.values(bill.perMember).reduce((a, p) => a + p.total, 0);
   const diff = (d.printedTotal ?? bill.computedTotal) - sumShares;
   const tilt = Math.max(-12, Math.min(12, diff / 100));
@@ -565,7 +815,7 @@ export function Shelf({ localId }: { localId: string }) {
     setBusy(true);
     try {
       await kvSet("host", { vpa, payee });
-      const r = await fetch("/api/rooms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restaurant: d.restaurant, payeeName: payee || "Host", vpa, printedTotal: d.printedTotal, members: d.members, items: d.items, charges: d.charges, claims: d.claims, demo: d.demo }) });
+      const r = await fetch("/api/rooms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restaurant: d.restaurant, payeeName: payee || "Host", vpa, printedTotal: d.printedTotal, members: d.members, items: d.items, charges: d.charges, claims: d.claims, demo: d.demo, groupId: d.demo ? null : d.groupId ?? null }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "error");
       try { localStorage.setItem("kp_dev", j.devToken); } catch {}
@@ -685,6 +935,13 @@ export function Shelf({ localId }: { localId: string }) {
             </label>
           )}
           {d.demo && <p className="mt-2 text-sm">Demo room: UPI ID demo@upi. {t("pay.demo")}.</p>}
+          {d.groupId && !d.demo && (
+            <p className="mt-3 flex items-center gap-2 rounded-sm bg-[#8e1c1c] px-2 text-sm shadow-inner">
+              <Tiffin n={tiffinInk(d.groupId)} size={22} />
+              <span className="min-w-0 flex-1"><b className="hand text-base">{d.groupName}</b> {t("khata.writesTo")}</span>
+              <button type="button" onClick={() => update(detachGroup)} className="tap underline underline-offset-4">Mat likho</button>
+            </p>
+          )}
           {err && <p role="alert" className="mt-2 font-semibold text-[#FF8F85]">{err}</p>}
           <div className="mt-3 flex gap-2">
             <button type="button" onClick={undo} className="tap press kot rounded-md px-3 font-semibold">{t("undo")}</button>
@@ -692,6 +949,22 @@ export function Shelf({ localId }: { localId: string }) {
           </div>
           <a href={`/bill/${d.id}`} className="tap mt-2 inline-flex items-center text-sm underline">{t("table.title")}</a>
         </section>
+      </div>
+    </main>
+  );
+}
+
+/** Jars on the plank and a resting scale, at their final sizes, while the draft loads. */
+function ShelfSkeleton() {
+  return (
+    <main className="mx-auto min-h-dvh max-w-xl px-4 pt-4" aria-busy="true" aria-label="Shelf lag rahi hai">
+      <div className="ph h-10 w-56" />
+      <div className="mt-3 flex gap-1 pt-4">
+        {[0, 1, 2, 3].map((i) => <div key={i} className="h-[108px] w-[78px] shrink-0 rounded-b-2xl rounded-t-md border-2 border-dashed border-current opacity-25" />)}
+      </div>
+      <div className="teak h-4 rounded shadow-md" />
+      <div className="formica mt-4 grid grid-cols-2 gap-2 rounded-xl p-3">
+        {[0, 1].map((i) => <div key={i} className="kot h-28 rounded-lg opacity-70" />)}
       </div>
     </main>
   );

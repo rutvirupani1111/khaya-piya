@@ -2,6 +2,7 @@
 import { AnimatePresence, m } from "motion/react";
 import qrcode from "qrcode-generator";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { kvGet, kvSet } from "@/lib/draft";
 import { amountParam } from "@/lib/money";
 import { applyOp, billOf, type Actor, type Op, type Snapshot } from "@/lib/room/ops";
 import { Coin, Jar, Mishri, Money, Pattern, Seeds, Stamp, Thali, ink } from "./art";
@@ -20,13 +21,35 @@ function devHeader(): Record<string, string> {
   }
 }
 
-/** Server snapshot + optimistic outbox, polled with ETag/304. */
-function useRoom(initial: Snap) {
+/**
+ * Server snapshot + optimistic outbox, polled with ETag/304. The outbox is kept in IndexedDB, so ops tapped
+ * offline survive a reload and replay when the network returns. `preview` is the host looking at the guest
+ * folder: it polls as a stranger and never sends anything.
+ */
+function useRoom(initial: Snap, preview = false) {
   const [server, setServer] = useState(initial);
   const [outbox, setOutbox] = useState<Op[]>([]);
   const [failed, setFailed] = useState(false);
   const lastChange = useRef(Date.now());
   const sending = useRef(false);
+  const restored = useRef(false);
+  const boxKey = `outbox:${initial.code}`;
+
+  useEffect(() => {
+    if (preview) return;
+    kvGet<Op[]>(boxKey)
+      .then((saved) => {
+        if (saved?.length) setOutbox((cur) => [...saved.filter((a) => !cur.some((b) => b.opId === a.opId)), ...cur]);
+      })
+      .catch(() => {})
+      .finally(() => {
+        restored.current = true;
+        setOutbox((cur) => [...cur]); // write once now that the saved queue is merged
+      });
+  }, [boxKey, preview]);
+  useEffect(() => {
+    if (restored.current) kvSet(boxKey, outbox).catch(() => {});
+  }, [outbox, boxKey]);
 
   const view: Snap = (() => {
     let s = server as Snap;
@@ -83,7 +106,7 @@ function useRoom(initial: Snap) {
       if (stop) return;
       if (!document.hidden && !done()) {
         try {
-          const r = await fetch(`/api/r/${server.code}?v=${server.version}`, { headers: devHeader(), cache: "no-store" });
+          const r = await fetch(`/api/r/${server.code}?v=${server.version}${preview ? "&as=guest" : ""}`, { headers: devHeader(), cache: "no-store" });
           if (r.status === 200) {
             setServer(await r.json());
             lastChange.current = Date.now();
@@ -97,19 +120,20 @@ function useRoom(initial: Snap) {
     const vis = () => { if (!document.hidden) { clearTimeout(timer); tick(); } };
     document.addEventListener("visibilitychange", vis);
     return () => { stop = true; clearTimeout(timer); document.removeEventListener("visibilitychange", vis); };
-  }, [server]);
+  }, [server, preview]);
 
   const send = (op: Omit<Op, "opId">) => {
+    if (preview) return;
     lastChange.current = Date.now();
     setOutbox((o) => [...o, { ...op, opId: crypto.randomUUID() } as Op]);
   };
-  return { view, setServer, send, pending: outbox.length, failed, retry: flush };
+  return { view, setServer, send, pending: outbox.length, failed, retry: flush, preview };
 }
 
-export function Room({ initial }: { initial: Snap }) {
-  const room = useRoom(initial);
+export function Room({ initial, preview = false }: { initial: Snap; preview?: boolean }) {
+  const room = useRoom(initial, preview);
   const v = room.view;
-  if (v.me.isHost) return <Galla room={room} />;
+  if (v.me.isHost && !preview) return <Galla room={room} />;
   return <Folder room={room} />;
 }
 
@@ -237,6 +261,11 @@ function GuestPage({ room, nameRef }: { room: RoomApi; nameRef: React.RefObject<
         {mine && <span className="text-sm">{t("share.mine")} <Money p={mine.total} className="display text-lg text-[var(--haldi)]" /></span>}
       </m.header>
 
+      {room.preview && (
+        <p role="note" className="hand mt-3 -rotate-1 rounded-sm bg-[var(--haldi)] px-3 py-2 text-lg leading-snug text-[#1B1A17] shadow">
+          Ye dost ke phone ka view hai. Yahan se koi naam nahi judega, sirf dekhne ke liye.
+        </p>
+      )}
       {!me && (
         <section className="kot mt-4 rounded-md p-4">
           <label htmlFor="nm" className="display text-2xl">{t("folder.name")}</label>
@@ -254,7 +283,7 @@ function GuestPage({ room, nameRef }: { room: RoomApi; nameRef: React.RefObject<
             </div>
           )}
           {err && <p role="alert" className="mt-2 text-[var(--stamp-red-deep)]">{err}</p>}
-          <button type="button" disabled={!name.trim() || busy} onClick={join} className="tap press mt-3 w-full rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] disabled:opacity-50">{t("folder.join")}</button>
+          <button type="button" disabled={!name.trim() || busy || room.preview} onClick={join} className="tap press mt-3 w-full rounded-md bg-[var(--stamp-red-deep)] text-lg font-semibold text-[#F6EED9] disabled:opacity-50">{t("folder.join")}</button>
         </section>
       )}
 
@@ -394,9 +423,30 @@ function Coupon({ room, memberId }: { room: RoomApi; memberId: string }) {
 }
 
 /* --------------------------- GALLA (host) --------------------------- */
+/** The finalised splits this phone has seen, for the install nudge on the Counter (after the second one). */
+function noteFinal(code: string) {
+  try {
+    const seen = JSON.parse(localStorage.getItem("kp_finals") || "[]") as string[];
+    if (!seen.includes(code)) localStorage.setItem("kp_finals", JSON.stringify([...seen, code].slice(-20)));
+  } catch {}
+}
+
 function Galla({ room }: { room: RoomApi }) {
   const { t } = usePrefs();
   const v = room.view;
+  const [undo, setUndo] = useState<{ memberId: string; label: string; key: number } | null>(null);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = setTimeout(() => setUndo(null), 5000);
+    return () => clearTimeout(timer);
+  }, [undo]);
+  useEffect(() => {
+    if (v.status === "final") noteFinal(v.code);
+  }, [v.status, v.code]);
+  const settleWith = (type: "confirm_received" | "mark_cash", memberId: string, name: string) => {
+    room.send({ type, memberId });
+    setUndo({ memberId, label: `${name}: ${type === "mark_cash" ? "cash mila" : "mila"}`, key: Date.now() });
+  };
   const link = typeof window !== "undefined" ? `${window.location.origin}/r/${v.code}` : `/r/${v.code}`;
   const got = v.members.reduce((a, mm) => a + (["received", "cash"].includes(v.payments[mm.id]?.state) && mm.id !== v.hostMemberId ? v.bill.perMember[mm.id]?.total ?? 0 : 0), 0);
   const due = v.members.reduce((a, mm) => a + (mm.id !== v.hostMemberId && !["received", "cash"].includes(v.payments[mm.id]?.state) ? v.bill.perMember[mm.id]?.total ?? 0 : 0), 0);
@@ -412,6 +462,12 @@ function Galla({ room }: { room: RoomApi }) {
         <div>
           <p className="mono text-xs opacity-70">ROOM</p>
           <h1 className="display text-4xl">{v.code.slice(0, 3)} {v.code.slice(3)}</h1>
+          {v.groupName && (
+            <a href="/khata" className="hand mt-1 inline-flex -rotate-1 items-center gap-1 rounded-sm bg-[#8e1c1c] px-2 text-sm text-[#F6EED9] shadow">
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2h9a1 1 0 0 1 1 1v11H4a1 1 0 0 1-1-1zM5 5h6M5 8h6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+              {v.groupName} ke khate mein
+            </a>
+          )}
         </div>
         <p className="text-right text-sm"><Money p={got} className="font-semibold text-[var(--chutney-deep)]" /> mila<br /><Money p={due} className="font-semibold text-[var(--stamp-red)]" /> baaki</p>
       </header>
@@ -444,9 +500,9 @@ function Galla({ room }: { room: RoomApi }) {
                 </AnimatePresence>
                 {isHost ? <p className="text-xs opacity-70">Tera hissa</p> : (
                   <div className="mt-1 flex flex-wrap gap-1 text-xs font-semibold">
-                    {p.state === "sent" && <button type="button" className="tap press rounded bg-[var(--chutney)] px-2 text-white" onClick={() => room.send({ type: "confirm_received", memberId: mm.id })}>{t("host.received")}</button>}
+                    {p.state === "sent" && <button type="button" className="tap press rounded bg-[var(--chutney)] px-2 text-white" onClick={() => settleWith("confirm_received", mm.id, mm.name)}>{t("host.received")}</button>}
                     {p.state === "sent" && <button type="button" className="tap press rounded border px-2" onClick={() => room.send({ type: "reject_received", memberId: mm.id })}>{t("host.notReceived")}</button>}
-                    {p.state === "unpaid" && <button type="button" className="tap press rounded border px-2" onClick={() => room.send({ type: "mark_cash", memberId: mm.id })}>{t("host.cash")}</button>}
+                    {p.state === "unpaid" && <button type="button" className="tap press rounded border px-2" onClick={() => settleWith("mark_cash", mm.id, mm.name)}>{t("host.cash")}</button>}
                     {p.state === "unpaid" && <a className="tap press grid place-items-center rounded border px-2" target="_blank" rel="noopener" href={`https://wa.me/?text=${encodeURIComponent(`${mm.name}, ${v.restaurant || "bill"} ka tera hissa ₹${amountParam(total)} hai. Yahan dekh aur bhej: ${link}`)}`}>{t("host.nudge")}</a>}
                     {(p.state === "received" || p.state === "cash") && <Stamp text="MILA" color="#5CC98A" rotate={4} />}
                   </div>
@@ -468,6 +524,15 @@ function Galla({ room }: { room: RoomApi }) {
       </section>
       <div className="mt-4 flex justify-center opacity-80"><Jar label="Galla" amount={`₹${amountParam(got)}`} color="#B87333" /></div>
       <div className="mt-2 flex justify-center"><Thali seat={1} name={v.members[0]?.name ?? "M"} size={56} /></div>
+      <AnimatePresence>
+        {undo && (
+          <m.div key={undo.key} role="status" initial={{ y: 60, opacity: 0, rotate: -2 }} animate={{ y: 0, opacity: 1, rotate: -1 }} exit={{ y: 60, opacity: 0 }} transition={snap} className="kot fixed inset-x-4 bottom-4 z-50 mx-auto flex max-w-md items-center gap-3 overflow-hidden rounded-sm px-3 py-2 shadow-2xl">
+            <span className="hand flex-1 text-lg font-bold">{undo.label}</span>
+            <button type="button" className="tap press rounded-md bg-[#1B1A17] px-3 font-semibold text-[#F6EED9]" onClick={() => { room.send({ type: "undo_confirm", memberId: undo.memberId }); setUndo(null); }}>{t("undo")}</button>
+            <m.span className="absolute inset-x-0 bottom-0 h-1 origin-left bg-[var(--chutney)]" initial={{ scaleX: 1 }} animate={{ scaleX: 0 }} transition={{ duration: 5, ease: "linear" }} />
+          </m.div>
+        )}
+      </AnimatePresence>
     </main>
   );
 }

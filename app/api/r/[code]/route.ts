@@ -18,6 +18,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ code: strin
     return new NextResponse(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-store" } });
   }
   const dev = deviceToken(req);
-  const actor = await resolveActor(null, room, req.cookies.get(hostCookie(c))?.value, dev.tok);
+  const actor = req.nextUrl.searchParams.get("as") === "guest" ? { isHost: false, memberId: null } : await resolveActor(null, room, req.cookies.get(hostCookie(c))?.value, dev.tok);
   return NextResponse.json(toSnapshot(room, actor), { headers: { ETag: etag, "Cache-Control": "no-store" } });
 }

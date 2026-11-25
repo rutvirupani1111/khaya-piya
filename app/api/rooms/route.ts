@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { tx } from "@/lib/db";
 import type { RoomState } from "@/lib/room/ops";
+import { seatsToPeople } from "@/lib/db/tenant";
+import { userFromReq } from "@/lib/server/auth";
 import { deviceToken, setDeviceCookie, setHostCookie, syncTables } from "@/lib/server/room";
 import { badOrigin, fail, ipHash, limited, readJson, roomCode, sha256, token, tooMany, VPA_RX } from "@/lib/server/security";
 
@@ -13,7 +15,8 @@ const Body = z.object({
   payeeName: z.string().regex(/^[A-Za-z .]{1,40}$/),
   vpa: z.string().max(320),
   printedTotal: z.number().int().min(0).max(100_000_000).nullable(),
-  members: z.array(z.object({ id: uuid, seat: z.number().int().min(1).max(20), name: z.string().min(1).max(24) })).min(1).max(20),
+  members: z.array(z.object({ id: uuid, seat: z.number().int().min(1).max(20), name: z.string().min(1).max(24), personId: uuid.nullable().optional() })).min(1).max(20),
+  groupId: uuid.nullable().optional(),
   items: z.array(z.object({ id: uuid, name: z.string().min(1).max(60), qty: z.number().int().min(1).max(99), amount: z.number().int().min(0).max(100_000_000), kind: z.enum(["food", "drink", "other"]) })).max(80),
   charges: z
     .array(
@@ -57,7 +60,9 @@ export async function POST(req: NextRequest) {
   if ((await limited(`room:create:ip:${ip}:h`, 10, 3600)) || (await limited(`room:create:ip:${ip}:d`, 40, 86400)) || (await limited(`room:create:dev:${devH}`, 20, 86400)))
     return tooMany();
 
-  const members = [...body.members].sort((a, b) => a.seat - b.seat).map((m, i) => ({ ...m, seat: i + 1, joined: i === 0 }));
+  const user = await userFromReq(req);
+  if (body.groupId && !user) return fail("Khate mein likhne ke liye pehle andar aao.", 401);
+  const members = [...body.members].sort((a, b) => a.seat - b.seat).map((m, i) => ({ id: m.id, seat: i + 1, name: m.name, joined: i === 0, personId: null as string | null, wantPerson: m.personId ?? null }));
   const state: RoomState = {
     status: "open",
     restaurant: body.restaurant.trim(),
@@ -65,7 +70,7 @@ export async function POST(req: NextRequest) {
     printedTotal: body.printedTotal,
     hostMemberId: members[0].id,
     isDemo: demo,
-    members,
+    members: members.map(({ wantPerson: _w, ...m }) => m),
     items: body.items,
     charges: body.charges,
     claims: body.claims,
@@ -73,13 +78,21 @@ export async function POST(req: NextRequest) {
   };
   const hostTok = token(32);
   let code = "";
+  let groupId: string | null = null;
   await tx(async (q) => {
+    if (body.groupId && user && !demo) {
+      const map = await seatsToPeople(q, user.id, body.groupId, members.map((m) => ({ id: m.id, name: m.name, personId: m.wantPerson })));
+      if (map) {
+        groupId = body.groupId;
+        for (const m of state.members) m.personId = map[m.id] ?? null;
+      }
+    }
     for (let tries = 0; tries < 5; tries++) {
       code = roomCode();
       const r = await q.query(
-        `insert into rooms (code, status, restaurant, vpa, payee_name, host_token_hash, host_member_id, printed_total_paise, is_demo, snapshot, created_ip_hash, expires_at)
-         values ($1, 'open', $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + ($11)::interval) on conflict (code) do nothing returning code`,
-        [code, state.restaurant || null, vpa, state.payeeName, sha256(hostTok), state.hostMemberId, state.printedTotal, demo, JSON.stringify(state), ipHash(req), demo ? "24 hours" : "30 days"],
+        `insert into rooms (code, status, restaurant, vpa, payee_name, host_token_hash, host_member_id, printed_total_paise, is_demo, snapshot, created_ip_hash, expires_at, group_id, owner_user_id)
+         values ($1, 'open', $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + ($11)::interval, $12, $13) on conflict (code) do nothing returning code`,
+        [code, state.restaurant || null, vpa, state.payeeName, sha256(hostTok), state.hostMemberId, state.printedTotal, demo, JSON.stringify(state), ipHash(req), demo ? "24 hours" : "30 days", groupId, user?.id ?? null],
       );
       if (r.length) break;
     }

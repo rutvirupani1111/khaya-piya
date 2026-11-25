@@ -18,6 +18,18 @@ export function Prefs({ lang: initial, children }: { lang: Lang; children: React
     } catch {}
     setC(mq.matches || saved === "1");
   }, []);
+  // the service worker keeps the Counter, Table and Shelf working offline and catches shared bill photos
+  useEffect(() => {
+    if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("/sw.js").catch(() => {});
+    // the install prompt is kept for the Counter's "Ghar pe rakh lo" chit, which only shows after two finalised splits
+    const keep = (e: Event) => {
+      e.preventDefault();
+      (window as unknown as { __kpInstall?: Event }).__kpInstall = e;
+      window.dispatchEvent(new Event("kp-install"));
+    };
+    window.addEventListener("beforeinstallprompt", keep);
+    return () => window.removeEventListener("beforeinstallprompt", keep);
+  }, []);
   const setLang = (l: Lang) => {
     document.cookie = `kp_lang=${l}; path=/; max-age=31536000; samesite=lax`;
     setL(l);

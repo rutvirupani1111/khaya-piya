@@ -16,5 +16,6 @@ export async function GET(req: NextRequest) {
   await sql(`delete from rate_limits where window_start < now() - interval '2 days'`);
   await sql(`delete from magic_tokens where expires_at < now()`);
   await sql(`delete from sessions where expires_at < now()`);
+  await sql(`delete from auth_challenges where expires_at < now()`);
   return json({ rooms });
 }

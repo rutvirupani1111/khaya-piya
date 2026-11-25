@@ -13,7 +13,7 @@ export function roomCode(len = 7) {
   return s;
 }
 
-export function ipHash(req: NextRequest) {
+export function ipHash(req: Pick<NextRequest, "headers"> | { headers: { get(name: string): string | null } }) {
   const ip = (req.headers.get("x-forwarded-for") || "0.0.0.0").split(",")[0].trim();
   const day = new Date().toISOString().slice(0, 10); // rotating salt: daily
   return sha256(`${process.env.IP_SALT || "kp"}:${day}:${ip}`);

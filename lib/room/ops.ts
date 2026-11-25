@@ -6,6 +6,8 @@ export type RoomStatus = "open" | "locked" | "final" | "closed";
 
 export interface RoomMember extends Member {
   joined: boolean;
+  /** set when the room was opened from a Khata group: this seat's person in that group */
+  personId?: string | null;
 }
 export interface Payment { state: PayState; amount: number | null; sentAt: string | null; confirmedAt: string | null }
 
@@ -25,6 +27,7 @@ export interface RoomState {
 
 export interface Snapshot extends RoomState {
   code: string;
+  groupName?: string | null;
   version: number;
   vpa?: string;
   vpaMasked: string;
@@ -222,6 +225,16 @@ export function applyOp(prev: RoomState, op: Op, actor: Actor, now = new Date().
       const amt = billOf(s).perMember[memberId]?.total ?? 0;
       if (op.type === "reject_received") s.payments[memberId] = { ...p, state: "unpaid", confirmedAt: null };
       else s.payments[memberId] = { ...p, state: op.type === "mark_cash" ? "cash" : "received", amount: p.amount ?? amt, confirmedAt: now };
+      return { ok: true, state: s };
+    }
+    case "undo_confirm": {
+      // the host takes back a Mila / Cash tapped by mistake: back to "sent" if the guest had sent, else unpaid
+      const e = hostOnly();
+      if (e) return { ok: false, reason: e };
+      const memberId = str(op.memberId);
+      const p = s.payments[memberId];
+      if (!p || (p.state !== "received" && p.state !== "cash")) return { ok: false, reason: "not_settled" };
+      s.payments[memberId] = p.sentAt ? { ...p, state: "sent", confirmedAt: null } : { ...p, state: "unpaid", amount: null, confirmedAt: null };
       return { ok: true, state: s };
     }
     case "lock":

@@ -6,17 +6,22 @@
   "author": "Rutvi Rupani",
   "license": "UNLICENSED",
   "scripts": {
-    "dev": "next dev -p 3720",
+    "dev": "next dev -p 3712",
     "build": "next build",
-    "start": "next start -p 3720",
+    "start": "next start -p 3712",
     "typecheck": "tsc --noEmit",
     "migrate": "node scripts/migrate.mjs"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["@tailwindcss/oxide", "unrs-resolver"]
+    "onlyBuiltDependencies": [
+      "@tailwindcss/oxide",
+      "unrs-resolver"
+    ]
   },
   "dependencies": {
     "@neondatabase/serverless": "1.2.0",
+    "@simplewebauthn/browser": "13.1.0",
+    "@simplewebauthn/server": "13.1.1",
     "motion": "14.13.0",
     "next": "16.4.6",
     "qrcode-generator": "2.0.4",

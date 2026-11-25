@@ -2,16 +2,22 @@
 // Local bill draft, kept in IndexedDB on this phone until the room opens.
 import type { Charge, Claim, Item, Member } from "./money";
 
+/** A seat on this phone's draft. personId is set when the seat came from a Khata tiffin. */
+export type DraftMember = Member & { personId?: string | null };
+
 export interface Draft {
   id: string;
   restaurant: string;
   printedTotal: number | null;
-  members: Member[];
+  members: DraftMember[];
   items: Item[];
   charges: Charge[];
   claims: Claim[];
   demo: boolean;
   roomCode?: string;
+  /** the Khata tiffin this bill will be written to when the room opens */
+  groupId?: string | null;
+  groupName?: string | null;
   updatedAt: number;
 }
 

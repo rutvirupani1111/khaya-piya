@@ -140,3 +140,34 @@ body {
   .wobble { animation: none; }
   *, *::before, *::after { transition-duration: 0.01ms !important; }
 }
+
+/* red cloth ledger binding: a tight weave, darker at the spine */
+.cloth {
+  background-color: #8e1c1c;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.14) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.35), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.25));
+  color: #f6eed9;
+}
+/* waiter's order pad: white carbon paper with blue rules and a red header band */
+.pad {
+  background-color: #fdfbf3;
+  background-image: linear-gradient(180deg, transparent 0 63px, #d62828 63px 65px, transparent 65px), repeating-linear-gradient(180deg, transparent 0 35px, rgba(31, 90, 160, 0.22) 35px 36px);
+  background-position: 0 0, 0 30px;
+  color: var(--ink);
+}
+.ledger-row { min-height: 32px; line-height: 32px; }
+/* scene-shaped loading placeholders: they breathe, never spin */
+@keyframes breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.8; } }
+.ph { background: rgba(27, 26, 23, 0.14); border-radius: 4px; animation: breathe 1.4s ease-in-out infinite; }
+.ph-light { background: rgba(246, 238, 217, 0.22); border-radius: 4px; animation: breathe 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .ph, .ph-light { animation: none; }
+}
+/* walking from one scene of the eatery to the next */
+@keyframes scene-in { from { opacity: 0; } to { opacity: 1; } }
+.scene-in { animation: scene-in 240ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .scene-in { animation: none; }
+}

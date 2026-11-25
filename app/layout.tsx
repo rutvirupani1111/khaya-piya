@@ -11,6 +11,7 @@ const plex = IBM_Plex_Mono({ weight: "500", subsets: ["latin"], variable: "--f-p
 const kalam = Kalam({ weight: ["400", "700"], subsets: ["latin", "devanagari"], variable: "--f-kalam", display: "swap", preload: false });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://khaya-piya.vercel.app"),
   title: "KhayaPiya",
   description: "Snap the restaurant bill, tap who ate what, and everyone pays their own exact share by UPI before leaving the table.",
   manifest: "/manifest.webmanifest",

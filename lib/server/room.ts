@@ -12,6 +12,8 @@ export interface RoomRow {
   is_demo: boolean;
   snapshot: RoomState;
   group_id: string | null;
+  group_name?: string | null;
+  owner_user_id?: string | null;
   expires_at: string;
 }
 
@@ -29,8 +31,9 @@ export function setHostCookie(res: NextResponse, code: string, tok: string) {
 }
 
 export async function loadRoom(q: Q | null, code: string, lock = false): Promise<RoomRow | null> {
-  const text = `select code, version, status, vpa, encode(host_token_hash, 'hex') as host_token_hash, is_demo, snapshot, group_id, expires_at
-                from rooms where code = $1 and expires_at > now()${lock ? " for update" : ""}`;
+  const text = `select r.code, r.version, r.status, r.vpa, encode(r.host_token_hash, 'hex') as host_token_hash, r.is_demo, r.snapshot, r.group_id, r.owner_user_id, r.expires_at,
+                       (select g.name from groups g where g.id = r.group_id) as group_name
+                from rooms r where r.code = $1 and r.expires_at > now()${lock ? " for update of r" : ""}`;
   const rows = q ? await q.query<RoomRow>(text, [code]) : await sql<RoomRow>(text, [code]);
   return rows[0] ?? null;
 }
@@ -52,6 +55,7 @@ export function toSnapshot(room: RoomRow, actor: Actor): Snapshot & { me: Actor 
     ...s,
     code: room.code,
     version: Number(room.version),
+    groupName: room.group_name ?? null,
     ...(showVpa && room.vpa ? { vpa: room.vpa } : {}),
     vpaMasked: showVpa ? maskVpa(room.vpa) : "",
     bill: billOf(s),
@@ -63,9 +67,9 @@ export function toSnapshot(room: RoomRow, actor: Actor): Snapshot & { me: Actor 
 export async function syncTables(q: Q, code: string, s: RoomState) {
   for (const m of s.members) {
     await q.query(
-      `insert into members (id, room_code, seat, name) values ($1, $2, $3, $4)
-       on conflict (id) do update set name = excluded.name, seat = excluded.seat`,
-      [m.id, code, m.seat, m.name],
+      `insert into members (id, room_code, seat, name, group_person_id) values ($1, $2, $3, $4, $5)
+       on conflict (id) do update set name = excluded.name, seat = excluded.seat, group_person_id = excluded.group_person_id`,
+      [m.id, code, m.seat, m.name, m.personId ?? null],
     );
     const p = s.payments[m.id] ?? { state: "unpaid", amount: null, sentAt: null, confirmedAt: null };
     await q.query(
@@ -122,6 +126,7 @@ export async function runOps(code: string, ops: Op[], hostTok: string | undefine
     let version = Number(room.version);
     const rejected: { opId: string; reason: string }[] = [];
     let changed = false;
+    const accepted: Op[] = [];
     for (const op of ops) {
       const seen = await q.query(`select 1 from ops where op_id = $1`, [op.opId]);
       if (seen.length) continue;
@@ -137,6 +142,7 @@ export async function runOps(code: string, ops: Op[], hostTok: string | undefine
       state = r.state;
       version += 1;
       changed = true;
+      accepted.push(op);
       const { opId, type, ...payload } = op;
       await q.query(`insert into ops (room_code, version, op_id, member_id, is_host, type, payload) values ($1, $2, $3, $4, $5, $6, $7)`, [
         code, version, opId, actor.memberId, actor.isHost, type, JSON.stringify(payload),
@@ -145,43 +151,61 @@ export async function runOps(code: string, ops: Op[], hostTok: string | undefine
     }
     if (changed) {
       await writeRoom(q, room, state, version);
-      await ledgerHooks(q, room, state, ops);
+      await ledgerHooks(q, room, state, accepted);
     }
     return { version, rejected, room: { ...room, snapshot: state, version, status: state.status, vpa: state.status === "closed" ? null : room.vpa }, actor };
   });
 }
 
-/** Group rooms write ledger rows: a bill entry on finalize, a settlement on Mila / Cash. */
+/**
+ * Group rooms write ledger rows. Only accepted ops reach here, and every write replaces the row it would
+ * duplicate, so re-finalising or a second Mila never counts twice.
+ *  finalize: a bill entry, paid by the host's person, one share per seat that belongs to the group
+ *  reopen: the bill entry is taken back until the bill is final again
+ *  confirm_received / mark_cash: a settlement from that seat's person to the host's person
+ *  reject_received / undo_confirm: that settlement is taken back
+ */
 async function ledgerHooks(q: Q, room: RoomRow, s: RoomState, ops: Op[]) {
-  if (!room.group_id) return;
-  const people = await q.query<{ id: string; seat: number }>(`select id, seat from group_people where group_id = $1`, [room.group_id]);
-  const owner = await q.query<{ owner_id: string }>(`select owner_id from groups where id = $1`, [room.group_id]);
-  if (!owner[0]) return;
-  const personFor = (memberId: string) => {
-    const m = s.members.find((x) => x.id === memberId);
-    return people.find((p) => p.seat === m?.seat)?.id;
-  };
+  if (!room.group_id || !ops.length) return;
+  const g = await q.query<{ owner_id: string }>(`select owner_id from groups where id = $1`, [room.group_id]);
+  if (!g[0]) return;
+  const by = room.owner_user_id || g[0].owner_id;
+  const personFor = (memberId: string) => s.members.find((x) => x.id === memberId)?.personId ?? null;
   const payer = personFor(s.hostMemberId);
   if (!payer) return;
-  const bill = billOf(s);
   for (const op of ops) {
+    if (op.type === "finalize" || op.type === "reopen") {
+      await q.query(`delete from ledger_entries where group_id = $1 and room_code = $2 and kind = 'bill'`, [room.group_id, room.code]);
+    }
     if (op.type === "finalize") {
-      const e = await q.query<{ id: string }>(
-        `insert into ledger_entries (group_id, room_code, kind, payer_person_id, description, total_paise, created_by) values ($1, $2, 'bill', $3, $4, $5, $6) returning id`,
-        [room.group_id, room.code, payer, (s.restaurant || "Bill").slice(0, 80), bill.computedTotal, owner[0].owner_id],
-      );
+      const bill = billOf(s);
+      const shares = new Map<string, number>();
       for (const m of s.members) {
         const pid = personFor(m.id);
-        if (pid) await q.query(`insert into ledger_shares (entry_id, person_id, owed_paise) values ($1, $2, $3) on conflict do nothing`, [e[0].id, pid, bill.perMember[m.id]?.total ?? 0]);
+        const owed = bill.perMember[m.id]?.total ?? 0;
+        if (pid && owed > 0) shares.set(pid, (shares.get(pid) ?? 0) + owed);
       }
-    }
-    if (op.type === "confirm_received" || op.type === "mark_cash") {
-      const from = personFor(String(op.memberId));
-      if (!from || from === payer) continue;
-      const amt = s.payments[String(op.memberId)]?.amount ?? 0;
+      const total = [...shares.values()].reduce((a, b) => a + b, 0);
+      if (!total) continue;
+      const dishes = s.items.map((i) => i.name).join(", ").slice(0, 600);
       const e = await q.query<{ id: string }>(
-        `insert into ledger_entries (group_id, room_code, kind, payer_person_id, description, total_paise, created_by) values ($1, $2, 'settlement', $3, $4, $5, $6) returning id`,
-        [room.group_id, room.code, from, "Room settlement", amt, owner[0].owner_id],
+        `insert into ledger_entries (group_id, room_code, kind, payer_person_id, description, total_paise, created_by, dishes)
+         values ($1, $2, 'bill', $3, $4, $5, $6, $7) returning id`,
+        [room.group_id, room.code, payer, (s.restaurant || "Bill").slice(0, 80), total, by, dishes],
+      );
+      for (const [pid, owed] of shares) await q.query(`insert into ledger_shares (entry_id, person_id, owed_paise) values ($1, $2, $3)`, [e[0].id, pid, owed]);
+    }
+    if (op.type === "confirm_received" || op.type === "mark_cash" || op.type === "reject_received" || op.type === "undo_confirm") {
+      const memberId = String(op.memberId);
+      await q.query(`delete from ledger_entries where group_id = $1 and room_code = $2 and kind = 'settlement' and room_member_id = $3`, [room.group_id, room.code, memberId]);
+      if (op.type === "reject_received" || op.type === "undo_confirm") continue;
+      const from = personFor(memberId);
+      const amt = s.payments[memberId]?.amount ?? 0;
+      if (!from || from === payer || amt <= 0) continue;
+      const e = await q.query<{ id: string }>(
+        `insert into ledger_entries (group_id, room_code, kind, payer_person_id, description, total_paise, created_by, room_member_id)
+         values ($1, $2, 'settlement', $3, $4, $5, $6, $7) returning id`,
+        [room.group_id, room.code, from, `${s.restaurant || "Bill"}: ${op.type === "mark_cash" ? "cash" : "UPI"}`.slice(0, 80), amt, by, memberId],
       );
       await q.query(`insert into ledger_shares (entry_id, person_id, owed_paise) values ($1, $2, $3)`, [e[0].id, payer, amt]);
     }
